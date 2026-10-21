@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  # ============ go-cqhttp ============
+  go-cqhttp:
+    build:
+      context: .
+      dockerfile: Dockerfile.go-cqhttp
+    container_name: qq-go-cqhttp
+    network_mode: bot_net
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      # 持久化 QQ 登录态 + 日志 + 数据
+      - cq_data:/app/data
+      - cq_logs:/app/logs
+    restart: unless-stopped
+
+  # ============ NoneBot ============
+  bot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.bot
+    container_name: qq-bot
+    network_mode: bot_net
+    depends_on:
+      - go-cqhttp
+    env_file:
+      - ../bot/.env
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "8080:8080"   # 可选：把 NoneBot 暴露出来调试
+    restart: unless-stopped
+
+volumes:
+  cq_data:
+  cq_logs:

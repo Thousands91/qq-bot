@@ -132,15 +132,40 @@ async def _(event: GroupMessageEvent):
 
     books = books[:WANT]
     head = await remark(kw, books)
-
     lines = [head, ""]
+
+    # 每本书报"作者 + 年份 + 豆瓣页"，再在末尾按平台给一排链接。
+    # 不给每本书配四个平台的链接：三本书乘四个平台就是十二条，
+    # 群里一屏都装不下，而且同一个人在哪个平台买，跟具体是哪本关系不大。
     for i, b in enumerate(books, 1):
         author = b["author"] or "佚名"
         year = f"（{b['year']}）" if b["year"] else ""
         lines.append(f"{i}. {b['title']}　{author}{year}")
         lines.append(f"　　{b['url']}")
 
+    lines.append("")
+    lines.append("要去别处看看，往这儿走：")
+    for name, url in platforms(kw):
+        lines.append(f"　{name}　{url}")
+
     await find_cmd.finish(Message("\n".join(lines)))
+
+
+# 各平台按"搜书名"的地址。都是实测过的：
+# - 豆瓣 subject_search 是网页搜索，能直接出书；不用那个只返 JSON 的建议接口
+# - 微信读书 / QQ 阅读的搜索页是 JS 渲染，但地址有效，点开就出结果
+# - 京东、当当、孔夫子都走搜索页，不硬编码某个商品的 id（会变）
+# - 关键字**不做 percent-encode**：QQ 里 %E4%B8%89%E4%BD%93 这种一眼看不懂，
+#   而各站都认原样的中文（实测微信读书 329 处命中、QQ阅读 49 处）。
+def platforms(keyword: str) -> list:
+    return [
+        ("微信读书", f"https://weread.qq.com/web/search/books?keyword={keyword}"),
+        ("QQ阅读", f"https://book.qq.com/so/{keyword}"),
+        ("京东", f"https://search.jd.com/Search?keyword={keyword}&enc=utf-8"),
+        ("当当", f"https://search.dangdang.com/?key={keyword}"),
+        ("孔夫子旧书", f"https://search.kongfz.com/product/?keyword={keyword}"),
+        ("喜马拉雅", f"https://www.ximalaya.com/search/{keyword}"),
+    ]
 
 
 # ---------------------------------------------------------------- 古籍

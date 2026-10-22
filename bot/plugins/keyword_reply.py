@@ -7,6 +7,7 @@
 """
 import os
 import random
+import re
 
 from nonebot import on_message
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
@@ -14,29 +15,35 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 ENABLE = os.getenv("ENABLE_KEYWORD_REPLY", "true").lower() == "true"
 
 # ===================== 关键词 → 一句话 =====================
+# 触发规则就一条：**整句等于某个关键词**（允许后面带语气词或称呼）。
+# 没有包含匹配。群里说什么跟表对不上，机器人就沉默。
+#
+# 为什么这么严：早先"书"是单字关键词，"书架""说明书""我在看书"全把机器人
+# 叫出来；后来去掉包含匹配又发现"早上好"三个字撞上"今天早上好冷啊"照样误触。
+# 字面匹配分不清问候和陈述，只能收窄到"整句就是这句话"。
+# 代价是群友说"大家好"机器人不理——想让它理就往 SYNONYMS 里加一行。
+#
 # 键用元组可以把几种说法并成一条，回复池共用。
-# 早先"书"是单字关键词，群里聊到"书架""说明书""我在看书"全都会被叫出来，
-# 太吵。改成只认组合（找书、想看书、看书吗），单说一个"书"字不再触发。
 REPLIES = {
-    "早上好": [
+    ("早上好", "早安", "早", "早啊", "早上好啊", "早上好呀"): [
         "早安，今日开卷，宜读些轻的。",
         "早，我已在店里了，灯刚点上。",
         "早上好，七日之期又少一日。",
     ],
-    "晚上好": [
+    ("晚上好", "晚上好啊", "晚上好呀"): [
         "晚上好，这个时辰适合读长一点的书。",
         "夜了，灯下看字，会清楚些。🕯️",
         "晚上好，今日可有什么值得记下的？",
     ],
-    "你好": [
+    ("你好", "您好", "hi", "hello", "哈喽", "嗨"): [
         "您好，我是阿萨尔，书店的。",
         "您好，要看看书吗？",
     ],
-    "晚安": [
+    ("晚安", "晚安啦", "睡了"): [
         "晚安，灯我吹了。🕯️",
         "晚安，睡前一页闲书最好。",
     ],
-    "谢谢": [
+    ("谢谢", "多谢", "感谢", "谢了"): [
         "不必谢，这一条我记下了。",
         "客气了。",
     ],
@@ -62,7 +69,7 @@ REPLIES = {
         "百科全书是我和我的家族一直在编纂的东西。",
         "它必须是我亲眼所见，不能是道听途说。",
     ],
-    # 只认组合，不认单字"书"
+    # 只认整句，不认单字"书"
     ("找书", "想看书", "看书吗", "有什么书", "推荐本"): [
         "书是好东西，可惜读完就住在我脑子里了。",
         "想找什么书？说说看，或许我记得。",
@@ -87,10 +94,53 @@ REPLIES = {
 
 kw_reply = on_message(priority=80, block=False)
 
+# 问候语后面允许跟的东西。整句必须能拆成「关键词 + 这些词」才算。
+# 群友爱说什么新花样（"早上好哇"），往这里加一个字就行。
+TAIL_WORDS = ["各位", "大家", "朋友们", "兄弟们", "姐妹们", "亲们", "老板", "群主",
+              "啊", "呀", "吗", "呢", "吧", "啦", "哦", "嘛", "哈", "哇", "哟",
+              "了", "您", "你", "您们"]
+
 
 def _keys(item) -> list:
-    """关键词可以是字符串，也可以是一组说法。统一成 list 方便遍历。"""
+    """关键词可以是字符串，也可以是一组同义词。统一成 list 方便遍历。"""
     return [item] if isinstance(item, str) else list(item)
+
+
+def _match(text: str):
+    """整句匹配。命中返回 (关键词, 回复列表)，不中返回 None。
+
+    判断顺序：
+    1. 削掉标点和空白——"早上好！"和"早上好"是一回事
+    2. 整句等于某个关键词 → 命中
+    3. 整句 = 关键词 + 尾巴，且尾巴能全由 TAIL_WORDS 拼出来 → 命中
+       （"早上好啊各位"行，"早上好困"不行——"困"不在表里）
+    """
+    s = re.sub(r"[\s，。！？、,.!?~～……]+", "", text.strip()).lower()
+    if not s:
+        return None
+    pairs = []
+    for item, replies in REPLIES.items():
+        for kw in _keys(item):
+            pairs.append((kw.lower(), replies))
+    # 长词优先："苏丹卡"要在"苏丹"前面被检查到
+    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+    for kw, replies in pairs:
+        if s == kw:
+            return kw, replies
+        if not s.startswith(kw):
+            continue
+        rest = s[len(kw):]
+        i = 0
+        while i < len(rest):
+            for w in TAIL_WORDS:
+                if rest.startswith(w, i):
+                    i += len(w)
+                    break
+            else:
+                break
+        if i == len(rest):
+            return kw, replies
+    return None
 
 
 @kw_reply.handle()
@@ -98,29 +148,13 @@ async def _(event: GroupMessageEvent):
     if not ENABLE:
         return
 
-    text = event.get_plaintext().strip().lower()
+    text = event.get_plaintext().strip()
     if not text:
         return
     # 带命令前缀的消息交给正经命令处理，不在这里抢答
     if text[0] in ("/", "!", "！"):
         return
 
-    # 长词优先：发"群主你好"应该回群主那句，而不是"你好"。
-    # 早先是按字典顺序比，谁写在前面谁先中，纯看运气。
-    pairs = []
-    for item, replies in REPLIES.items():
-        for kw in _keys(item):
-            pairs.append((kw, replies))
-    pairs.sort(key=lambda p: len(p[0]), reverse=True)
-
-    # 精确匹配优先
-    for kw, replies in pairs:
-        if text == kw.lower():
-            await kw_reply.finish(Message(random.choice(replies)))
-            return
-
-    # 再退到包含匹配
-    for kw, replies in pairs:
-        if kw.lower() in text:
-            await kw_reply.finish(Message(random.choice(replies)))
-            return
+    m = _match(text)
+    if m:
+        await kw_reply.finish(Message(random.choice(m[1])))

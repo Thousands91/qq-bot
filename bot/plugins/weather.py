@@ -11,7 +11,10 @@ from nonebot import on_command
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 
 KEY = os.getenv("QWEATHER_KEY", "")
-HOST = os.getenv("QWEATHER_API_HOST", "https://devapi.qweather.com")
+# 和风天气 2024 年起改成"每个账号一个专属域名"（形如 xxxxx.re.qweatherapi.com），
+# 旧的 devapi.qweather.com 已停用。注册后在控制台-设置里能看到自己那个。
+# 没填 QWEATHER_API_HOST 时退回公共域名，不保证可用，只是给个提示性报错。
+HOST = os.getenv("QWEATHER_API_HOST", "https://devapi.qweather.com").rstrip("/")
 
 weather = on_command("天气", priority=20, block=True)
 

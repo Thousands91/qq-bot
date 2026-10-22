@@ -1,8 +1,8 @@
 """
-天气查询
+天气查询 —— 阿萨尔替你望一眼天
 命令：/天气 <城市>
 
-免费 key：和风天气 https://dev.qweather.com (一天 1000 次调用)
+免费 key：和风天气 https://dev.qweather.com （一天 1000 次调用）
 """
 import os
 
@@ -18,12 +18,16 @@ weather = on_command("天气", priority=20, block=True)
 
 @weather.handle()
 async def _(event: GroupMessageEvent):
-    city = event.get_plaintext().strip().replace("/天气", "", 1).strip()
+    city = event.get_plaintext().strip()
+    for p in ("/天气", "!天气", "！天气"):
+        city = city.replace(p, "", 1)
+    city = city.strip()
+
     if not city:
-        await weather.finish("用法：/天气 北京")
+        await weather.finish("您想去哪里？说个地名，我替您看一看天。")
 
     if not KEY:
-        await weather.finish("未配置和风天气 QWEATHER_KEY，请先在 .env 中填写")
+        await weather.finish("这一条我还查不了——店里没订天气的册子。")
 
     text = await get_weather(city)
     await weather.finish(Message(text))
@@ -41,7 +45,7 @@ async def get_weather(city: str) -> str:
             ) as r1:
                 j1 = await r1.json()
             if j1.get("code") != "200" or not j1.get("location"):
-                return f"找不到城市「{city}」😢"
+                return f"「{city}」这一地名，我的册子里没有。是不是写错了？"
             loc = j1["location"][0]
             city_name = loc["name"]
             adm = loc.get("adm1", "")
@@ -55,16 +59,18 @@ async def get_weather(city: str) -> str:
             ) as r2:
                 j2 = await r2.json()
             if j2.get("code") != "200":
-                return f"天气接口返回错误：{j2.get('code')}"
+                return f"册子翻到一半，页错了（{j2.get('code')}）。稍后再问我。"
 
             now = j2["now"]
             return (
-                f"🌤️ {city_name}（{adm}）当前天气\n"
-                f"气温：{now['temp']}°C（体感 {now['feelsLike']}°C）\n"
-                f"天气：{now['text']}\n"
-                f"风向风速：{now['windDir']} {now['windScale']}级\n"
-                f"相对湿度：{now['humidity']}%\n"
-                f"能见度：{now['vis']} km"
+                f"🕯️ {city_name}（{adm}）此刻的天\n"
+                f"─────────────\n"
+                f"气温　{now['temp']}°C（体感 {now['feelsLike']}°C）\n"
+                f"天气　{now['text']}\n"
+                f"风向　{now['windDir']} {now['windScale']}级\n"
+                f"湿度　{now['humidity']}%\n"
+                f"能见　{now['vis']} 里\n\n"
+                f"出门的话，记得看一眼再走。"
             )
     except Exception as e:
-        return f"查询失败：{type(e).__name__}"
+        return f"这本书今天翻不开（{type(e).__name__}）。"

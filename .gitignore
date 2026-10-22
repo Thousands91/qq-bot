@@ -1,0 +1,50 @@
+# ===== 密钥与本地配置（务必不要提交）=====
+bot/.env
+.env
+*.env
+!*.env.example
+cqhttp-config.local.yml
+docker/go-cqhttp/data/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ===== NoneBot 运行产物 =====
+bot/data/
+bot/cache/
+*.log
+logs/
+*.session
+*.session-journal
+
+# ===== go-cqhttp 运行产物 =====
+go-cqhttp/
+session.token
+device.json
+data/
+
+# ===== 编辑器 / 系统 =====
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 临时文件 =====
+*.zip
+*.tmp
+tmp/

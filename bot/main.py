@@ -3,10 +3,14 @@ NoneBot 启动入口
 """
 
 from pathlib import Path
+import sys
 
 from nonebot import init, load_plugins, get_driver
 
 from config import config
+
+# 让 persona 能被插件 import
+sys.path.insert(0, str(Path(__file__).parent))
 
 # 初始化
 init(config)

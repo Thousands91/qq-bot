@@ -10,7 +10,7 @@
 在终端粘贴：
 
 ```bash
-sed -i 's/password: "snh48teamp"/password: ""/' /workspaces/qq-bot/cqhttp/config.yml && pkill go-cqhttp; echo CLEANED
+sed -i 's/password: "你的密码"/password: ""/' /workspaces/qq-bot/cqhttp/config.yml && pkill go-cqhttp; echo CLEANED
 ```
 
 出现 `CLEANED` 即可。

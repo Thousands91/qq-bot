@@ -1,0 +1,10 @@
+# go-cqhttp 镜像 - 使用官方镜像，但日志更精简
+FROM mzzsfy/go-cqhttp:latest
+
+COPY config.yml /app/config.yml
+WORKDIR /app
+
+# 避免 root 启动某些 Linux 上跑不了
+RUN if [ -f /app/go-cqhttp ]; then chmod +x /app/go-cqhttp; fi
+
+CMD ["./go-cqhttp", "-config", "/app/config.yml"]

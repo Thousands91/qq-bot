@@ -18,12 +18,21 @@ year / url，搜不到就是空数组。详情接口（简介、评分）全要 
 **古籍** 走 Project Gutenberg。它的中文区有 409 本，全部是公有领域作品
 （四大名著、《山海經》《三字經》《老殘遊記》…），可以合法下载 txt 进群。
 目录已抓成本地文件 bot/data/gutenberg_zh.json，所以匹配书名不联网也行。
+官方站连不上时自动降级到 pglaf 镜像（见 MIRRORS）。
 
 为什么不支持现代书下载
 ----------------------
 试过的都不可用：Anna's Archive / Z-Library / LibGen 全部连不上；微信读书、
 京东读书、当当要登录态且从不提供整本文件；超星、读秀要机构账号。
-现代书在版权期内，本来也没有合法的整本下载渠道。所以这部分只给豆瓣链接。
+现代书在版权期内，本来也没有合法的整本下载渠道。所以这部分只给豆瓣链接
+和微信读书的试读入口，让人自己去读前面几章。
+
+维基文库和 ctext 为什么没接
+---------------------------
+zh.wikisource.org 及全部镜像、ctext.org 在实测网络里 DNS 能解析但 TCP 直连超时，
+站点本身被阻断，不是代码问题。dumps.wikimedia.org 虽然能连，但中文维基文库里
+最有价值的现代标点校勘本仍在版权内，整包 dump 有 9.5GB，塞不进手机。
+所以古籍这条线仍然只靠 Gutenberg。哪天网络条件变了，在 MIRRORS 里加一条就行。
 """
 import json
 import os
@@ -50,12 +59,19 @@ WANT = 3          # 报几本
 MAX_TITLE = 32    # 书名过长就截断，免得撑破消息
 
 # ---- 古籍下载 ----
-GUTENBERG_TXT = "https://www.gutenberg.org/ebooks/{}.txt.utf-8"
-GUTENBERG_CACHE = "https://www.gutenberg.org/cache/epub/{}/pg{}.txt"
+GUTENBERG_HOST = "https://www.gutenberg.org"
+MIRROR_HOST = "https://gutenberg.pglaf.org"
+
+# 官方站最近频繁连不上（实测 300KB 要 27 秒，还常断在几十 KB），
+# pglaf 是 Gutenberg 的官方镜像站，结构更老但稳得多。两个都试，谁先给全用谁。
+# 顺序有讲究：先官方——它的 txt 是 utf-8 编码，镜像里有些老书是 Latin-1。
+MIRRORS = (GUTENBERG_HOST, MIRROR_HOST)
+
 CATALOG_PATH = Path(__file__).resolve().parent.parent / "data" / "gutenberg_zh.json"
 DL_MAX = 8 * 1024 * 1024      # 超过 8MB 不发，QQ 传大文件容易断
 DL_TIMEOUT = 60
-MAX_TRIES = 20        # 断流重试次数（每次能续上几十到几百 KB，大书要多试几轮）
+MAX_TRIES = 8         # 每个域名最多续传几轮，两个域名加起来 16 轮，够把 1MB 拖完
+MAX_MIRROR_TRIES = 3  # 镜像站很少断，不用给那么多轮
 
 API_KEY = os.getenv("OPENAI_API_KEY", "")
 BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -110,7 +126,7 @@ async def _(event: GroupMessageEvent):
                 return
             await find_cmd.finish(
                 f"《{old['title']}》那本取不下来——Gutenberg 那边没应声。"
-                f"\n{GUTENBERG_TXT.format(old['id'])}"
+                f"\n{GUTENBERG_HOST}/ebooks/{old['id']}"
             )
         # 没说要下载，就别自作主张发文件，只提一句
         await find_cmd.finish(
@@ -143,6 +159,12 @@ async def _(event: GroupMessageEvent):
         lines.append(f"{i}. {b['title']}　{author}{year}")
         lines.append(f"　　{b['url']}")
 
+    # 试读：微信读书对绝大多数在版书开放前几章免费。这里只给"去读"的入口，
+    # 不假装我们能替人把整本弄下来——那件事做不成，说清楚比糊弄强。
+    lines.append("")
+    lines.append("想先翻两页的，微信读书多半能试读：")
+    lines.append(f"　https://weread.qq.com/web/search/books?keyword={kw}")
+
     lines.append("")
     lines.append("要去别处看看，往这儿走：")
     for name, url in platforms(kw):
@@ -170,6 +192,35 @@ def platforms(keyword: str) -> list:
 
 # ---------------------------------------------------------------- 古籍
 
+# 判断标题里有没有汉字。Gutenberg 有十来本用英文标题的中国典籍，排序时要让位给中文原文。
+_HAS_CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+# 简繁对照：运行时不装 opencc（20MB 的包，手机不必要），
+# 用这张表覆盖目录里出现过的繁体字，198 个字，够用。
+# 重新生成：python3 scripts/gen_t2s.py
+_T2S_FROM = (
+    "俠備傳傷傾僉兒冊別剛劍勝叢吳吶國圍園圖團報場壇壺壽夢妝嬌孫學宮將尋島師庫廂廣張後"
+    "恆憶戲斬斷書東棄楊樂樓歐歡歸殘殺淵滄滬滸滿漢灣無燈爐爾牘狀現瑣瓊甌畫異癡禪禮竇筆"
+    "箋紀約紅經綠緣編織繚繡續羅義習翹聖聞聯聲臺舊莊華葉蓮蕩蕭蘇蘭補製見規覽觀訓記訪註"
+    "詞詠詩話語說誼調談論諧諫證譚讀變豐豔貞負賀賈賦載轟遊選遺鄧鄭鄰錄錦鍾鏡鐘鐵鐸鑒長"
+    "開閒間閣閨閱關陽際隨雙雜雞離雲韓韜頭顔顯風飛飲餘馬駐駢騙驚魚鳳鴻鶯鹽黃點齋龍"
+)
+_T2S_TO = (
+    "侠备传伤倾佥儿册别刚剑胜丛吴呐国围园图团报场坛壶寿梦妆娇孙学宫将寻岛师库厢广张后"
+    "恒忆戏斩断书东弃杨乐楼欧欢归残杀渊沧沪浒满汉湾无灯炉尔牍状现琐琼瓯画异痴禅礼窦笔"
+    "笺纪约红经绿缘编织缭绣续罗义习翘圣闻联声台旧庄华叶莲荡萧苏兰补制见规览观训记访注"
+    "词咏诗话语说谊调谈论谐谏证谭读变丰艳贞负贺贾赋载轰游选遗邓郑邻录锦钟镜钟铁铎鉴长"
+    "开闲间阁闺阅关阳际随双杂鸡离云韩韬头颜显风飞饮余马驻骈骗惊鱼凤鸿莺盐黄点斋龙"
+)
+_T2S = str.maketrans(_T2S_FROM, _T2S_TO)
+
+
+def _t2s(t: str) -> str:
+    """繁体转简体，只为让书名比对能通。表里没有的字原样保留。"""
+    return (t or "").translate(_T2S)
+
+
 def load_catalog() -> dict:
     """读本地古籍目录。文件没了就返回空字典，不影响现代书查询。"""
     try:
@@ -184,36 +235,68 @@ CATALOG = load_catalog()
 def match_old(keyword: str):
     """在古籍目录里找一本最像的。
 
-    匹配放宽一点：先把书名里的标点削掉、把「的/之」这类虚词去掉，
-    再比"关键字包含书名"或"书名包含关键字"，这样"下载红楼梦"也能中。
+    匹配放宽一点：先把书名里的标点削掉，再比"关键字包含书名"或"书名包含关键字"，
+    这样"下载红楼梦"也能中。
+
+    每个条目要比三种写法：条目标题（繁体原题）、s（简体）、alias（组内其它写法）。
+    alias 不能省——《二刻拍案惊奇》和《二刻拍案驚奇》在 Gutenberg 上是两条记录，
+    目录合并成一条后，不把别名一起比，敲繁体那个名字的人就搜不到了。
+
+    同分时中文优先
+    --------------
+    搜"论语"会同时命中中文原文《論語》(23839) 和英文译本
+    "The Chinese Classics — Volume 1: Confucian Analects"(4094)，两者都算精确匹配。
+    这不是理论问题，是实际排序问题：给中文群发一本英文书毫无道理。
+    所以纯英文标题的条目在同分时让位。
+
+    关键字也要转一遍
+    ----------------
+    目录里同时存了繁体原题和简体名，但 `_norm` 只做标点清理、不做简繁转换。
+    用户敲"三國演義"（繁），条目里只有"三国演义"（简），对不上——
+    所以比较前先把关键字转成简体。运行时不能依赖 opencc（那是 20MB 的包，
+    手机装不下也没必要），这里用一张常用字表，覆盖书名里出现的那几百个字。
     """
     k = _norm(keyword)
     if not k:
         return None
-    best = None
-    best_score = 0
+    k_s = _norm(_t2s(keyword))
+    hits = []
     for title, info in CATALOG.items():
-        for cand in (title, info.get("s", "")):
+        cands = [title, info.get("s", "")] + list(info.get("alias") or [])
+        best_local = 0
+        for cand in cands:
             c = _norm(cand)
             if not c:
                 continue
-            if c == k:
-                score = 100
-            elif c in k:
-                score = 60 + len(c)          # 书名越长越可信
-            elif k in c and len(k) >= 2:
-                score = 30 + len(k)
-            else:
-                continue
-            if score > best_score:
-                best_score = score
-                best = {"title": info.get("s") or title, "origin": title,
-                        "id": info["ids"][0]}
-    return best
+            # 繁体和简体两个方向都试：条目可能存繁体，用户可能敲简体，反之亦然
+            for q, cc in ((k, c), (k_s, _norm(_t2s(cand)))):
+                if not q:
+                    continue
+                if cc == q:
+                    score = 100
+                elif cc in q:
+                    score = 60 + len(cc)     # 书名越长越可信
+                elif q in cc and len(q) >= 2:
+                    score = 30 + len(q)
+                else:
+                    continue
+                best_local = max(best_local, score)
+        if not best_local:
+            continue
+        # 纯英文标题垫后；同分时先到先得，保持目录顺序稳定
+        is_en = not _HAS_CJK.search(title)
+        hits.append((best_local - (5 if is_en else 0), len(title), title, info))
+
+    if not hits:
+        return None
+    # 分数高的在前；同分选标题短的（《論語》优于《論語注疏》）
+    hits.sort(key=lambda h: (-h[0], h[1]))
+    _, _, title, info = hits[0]
+    return {"title": info.get("s") or title, "origin": title, "id": info["ids"][0]}
 
 
 async def fetch_txt(book_id: int):
-    """取一本古籍的纯文本，断了就续。
+    """取一本古籍的纯文本，断了就续，官方站不行就换镜像。
 
     这个下载链路有两个坑，都得绕：
 
@@ -228,12 +311,68 @@ async def fetch_txt(book_id: int):
 
     最后还要查结尾有没有 "*** END OF"——有头没尾的半截本子发到群里，
     比不发更难受。
+
+    镜像的坑单独说
+    --------------
+    pglaf 镜像是**旧快照**，有几本书停在很老的修订上。实测《三字經》(12479)
+    官方 24KB，镜像只有 4.6KB——正文都在，但前言、注释、版权页全没了。
+    所以镜像只能当降级用，宁可报"取不下来"也不能把残本递出去。
+    完整性判断在 _pull 里，只认 Content-Length。
     """
-    size = None
-    for url in (GUTENBERG_CACHE.format(book_id, book_id),
-                GUTENBERG_TXT.format(book_id)):
+    for host in MIRRORS:
+        data, err = await _pull(host, book_id)
+        if data:
+            return data, ""
+    return None, err if not err else "没取全"
+
+
+def mirror_path(book_id: int) -> str:
+    """算 pglaf 镜像里的目录。
+
+    它用的是 Gutenberg 最老的那套布局：把 id 去掉前导零，**最后一位之前
+    每位一层，末位单独成一级**。实测对照：
+
+        24264 → 2/4/2/6/24264/
+        12479 → 1/2/4/7/12479/
+         7376 → 7/3/7/7376/
+         2090 → 2/0/9/2090/     ← 只有三级，末级目录直接是 2090
+
+    2090 这种四位 id 最容易搞错：2/0/9/0/ 下面装的是 20900-20909 那批，
+    不是 2090。所以最后一位必须单独断开，不能跟前面的合并。
+    """
+    s = str(book_id).lstrip("0") or "0"
+    return "/".join(list(s[:-1]) + [str(book_id)])
+
+
+def _urls(host: str, book_id: int) -> list:
+    """某个域名下，这本书可能在哪几个地址。挨个试，第一个能下的算数。"""
+    if host == MIRROR_HOST:
+        d = mirror_path(book_id)
+        return [f"{host}/{d}/{book_id}-0.txt"]
+    # 官方站：cache 路径最快最稳，ebooks 那个是跳转后的正式地址
+    return [
+        f"{host}/cache/epub/{book_id}/pg{book_id}.txt",
+        f"{host}/ebooks/{book_id}.txt.utf-8",
+    ]
+
+
+async def _pull(host: str, book_id: int):
+    """在一个域名下把整本书拖下来。成功返回 (bytes, "")，失败返回 (None, 原因)。
+
+    判"拿全了"只认一个东西：**Content-Length**。这不是偷懒，是被坑出来的：
+
+    - 用 "END OF" 判结尾不行。官方新版文件里这个标记在正文之后、捐款说明之前，
+      离文件尾还有两千字节；镜像上的老版文件干脆没有这个标记。两头都不靠谱。
+    - 用"读满 DL_TIMEOUT 秒没断就算完"也不行。实测官方站 红楼梦 是 2663455 字节，
+      传到 502935 字节连接自己断了，`iter_chunked` 不抛异常就收尾，看起来像正常结束。
+
+    所以第一次请求一定记下 Content-Length，之后每轮都拿 len(data) 跟它比。
+    """
+    tries = MAX_TRIES if host == GUTENBERG_HOST else MAX_MIRROR_TRIES
+    for url in _urls(host, book_id):
         data = b""
-        for _ in range(MAX_TRIES):
+        size = 0
+        for _ in range(tries):
             try:
                 headers = {"User-Agent": UA, "Accept-Encoding": "identity"}
                 if data:
@@ -246,14 +385,15 @@ async def fetch_txt(book_id: int):
                                                       sock_read=45),
                     ) as r:
                         if r.status == 416:          # 要不到更多了，收工
-                            data_done = True
                             break
                         if r.status not in (200, 206):
                             break
                         if r.status == 200 and data:
                             data = b""               # 服务端不肯续传，从头来
-                        if size is None and r.status == 200:
-                            size = int(r.headers.get("Content-Length") or 0)
+                        # Content-Range 形如 "bytes 100-999/2663455"，斜杠后才是总长
+                        total = _total_size(r.headers)
+                        if total:
+                            size = total
                         async for chunk in r.content.iter_chunked(16 * 1024):
                             data += chunk
                             if len(data) > DL_MAX:
@@ -262,20 +402,35 @@ async def fetch_txt(book_id: int):
                 pass      # 断了不慌，下一轮接着要
             if len(data) >= DL_MAX:
                 break
-            # 拿够了就停：有 Content-Length 就按长度判断，没有就看结束标记
             if size and len(data) >= size:
                 break
-            if not size and b"END OF" in data[-2048:]:
-                break
 
-        # 完整性：长度对得上，或者有 Gutenberg 的结束标记。
-        # 早先只认 "END OF"，结果像 12479 这种没有该标记的完整文件被误判成残缺。
         if len(data) < 512 or b"Project Gutenberg" not in data[:4000]:
             continue
-        if size and len(data) < size * 0.99:
+        # 知道总长就必须拿满；不知道总长（极少）才退回看 END 标记
+        if size:
+            if len(data) < size:
+                continue
+        elif not (b"*** END OF" in data or b"End of the Project Gutenberg" in data):
             continue
         return data, ""
     return None, "没取全"
+
+
+def _total_size(headers) -> int:
+    """从响应头里抠出文件总长度。Content-Length 和 Content-Range 都认。"""
+    try:
+        cr = headers.get("Content-Range") or ""
+        if "/" in cr:
+            tail = cr.rsplit("/", 1)[1].strip()
+            if tail.isdigit():
+                return int(tail)
+        cl = headers.get("Content-Length")
+        if cl and str(cl).isdigit():
+            return int(cl)
+    except Exception:
+        pass
+    return 0
 
 
 async def send_txt(event: GroupMessageEvent, book: dict) -> bool:

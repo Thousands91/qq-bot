@@ -70,9 +70,11 @@ async def main():
             t = asyncio.create_task(reader())
             await asyncio.sleep(1)
 
-            for text, wait in [("/找书 三字经", 4), ("/找书 三字经 下载", 15),
-                               ("/找书 山海经 下载", 25),
-                               ("/找书 三体 下载", 6)]:
+            # 紅樓夢 2.6MB，官方站单线程要 60s，等久一点
+            for text, wait in [("/找书 三國演義", 5),
+                               ("/找书 论语", 5),
+                               ("/找书 三國演義 下载", 45),
+                               ("/找书 唐诗三百首", 5)]:
                 ev = {
                     "time": 1700000000, "self_id": BOT_UIN,
                     "post_type": "message", "message_type": "group",

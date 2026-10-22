@@ -1,0 +1,71 @@
+# go-cqhttp 配置文件
+# 与 NoneBot 之间使用 反向 WebSocket（在 Bot 端开端口，go-cqhttp 反过来连它）
+# NoneBot 的 WS server 默认监听 8080 端口（反 WSS 端点）
+
+account:
+  uin: 0                # 留 0 = 扫码登录；填了你自己的 QQ 号就是密码/扫码登录
+  password: ""          # 留空扫码即可；填了会尝试密码登录（不推荐）
+  encrypt: false        # 推荐 false，避免新版 wind 加密失败
+  status: 0
+  relogin:
+    enabled: true
+    reLoginDelay: 3
+    maxRetryTime: 10
+    reloginDelayStep: 1
+
+# 签名服务（nonebot 内置的签名服务器在国外，国内访问需要自行部署，
+# 若不需要发群图片/语音等可不启动：
+#   使用 https://github.com/Mrs4s/go-cqhttp/tree/master/silk 下重写版 release；
+#   或不填这一段，机器人仍可使用基本文本、图片消息能力）
+sign-server: "https://sign.lagrangecore.org/api/sign"
+# 国内可改用：sign-server: "http://127.0.0.1:8888/sign"
+
+# WebHook / 关闭 - 我们只用 反向 WS
+server:
+  - ws-reverse:
+      universal: ws://bot:8080/onebot/v11/ws    # bot 是 docker-compose 里的 bot 服务名
+      reconnect-interval: 5000
+      middlewares:
+        <<: *default
+  - http:
+      enabled: false
+      host: 0.0.0.0
+      port: 5700
+      middlewares:
+        <<: *default
+  - pprof:
+      enabled: false
+
+default:
+  middlewares:
+    default:
+      filter: default
+      access-token: ""
+      post-format: string
+
+heartbeat:
+  interval: 30
+
+message:
+  post-format: string
+  ignore-invalid-cqcode: false
+  force-fragment: false
+  fix-url: false
+  proxy-url: ""           # 如有需要：proxy-url: "http://127.0.0.1:7890"
+  report-self-message: false
+  remove-reply-at: false
+  extra-reply-data: false
+  skip-music: false
+
+# 群合并转发消息白名单（可忽略）
+database:
+  leveldb:
+    enable: true
+    cleanup-interval: 60
+
+# 默认禁用：陌生人消息、本地消息、离线消息
+log:
+  level: "info"
+
+rest:
+  enable: false

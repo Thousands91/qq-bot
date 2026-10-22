@@ -15,8 +15,8 @@
 2. 取流失败 → 发分享卡片（歌名/歌手/链接）
 3. 搜索失败 → 如实告诉用户没找到
 """
-import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
@@ -34,8 +34,9 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 MAX_BYTES = 16 * 1024 * 1024
 # 搜索回来的候选，最多往下试几个
 TRY_N = 6
-# QQ 语音条的单条时长上限约 60 秒，超过就只发卡片
-MAX_VOICE_SEC = 65
+# 语音时长上限：先设很宽，等实测出 QQ 到底卡在哪一秒再收紧。
+# 见 bot/data/voice_probe.log —— 下面 probe() 会把每次发送的时长和结果都记下来。
+MAX_VOICE_SEC = 300
 # 公开群聊里按这两个开关过滤：不含 VIP 曲目（免费也拿不到音频）、剔除现场/伴奏版
 FILTER_VIP = True
 BAD_WORDS = ("伴奏", "纯音乐", "ktv", "instrumental", "inst.", "remix", "dj", "慢摇")
@@ -63,28 +64,54 @@ async def _(event: GroupMessageEvent):
 
     # 同名歌很多，按顺序试，取第一个真能拿到音频的
     card = songs[0]
-    tried = []
     for s in songs[:TRY_N]:
         audio, sec, err = await fetch_audio(s["id"])
-        tried.append(err or f"{err}")
         if not audio:
             continue
         card = s
         if sec and sec > MAX_VOICE_SEC:
-            # 太长，语音条装不下
+            # 长到这个地步，语音条肯定装不下了
             await song_cmd.finish(
                 Message(f"{build_card(s)}\n\n这首 {sec} 秒，一条语音装不下。点开听吧。")
             )
         try:
-            await song_cmd.send(MessageSegment.record(audio))
+            # 长音频发过去要等 NapCat 转 silk 再上传，默认 30 秒的 api_timeout
+            # 根本不够，按体积给个宽裕的余量。
+            _t = 60 + len(audio) // (200 * 1024)
+            await song_cmd.send(MessageSegment.record(audio), _timeout=_t)
+            probe(sec, len(audio), "ok", "")
             return
-        except Exception as e:
-            tried[-1] = type(e).__name__
+        except BaseException as e:
+            # BaseException 不是手滑：音频往 WS 里塞是同步的，长音频能卡住
+            # 整个事件循环，卡太久会被 CancelledError 打断。这种也得兜住，
+            # 否则异常漏出去就是一个红色堆栈，用户那边什么也收不到。
+            probe(sec, len(audio), "fail", f"{type(e).__name__}|{_t if '_t' in dir() else '?'}")
+            await song_cmd.finish(
+                Message(f"{build_card(s)}\n\n这首 {sec} 秒，语音条递不过去。点开听吧。")
+            )
 
     # 全都拿不到音频，退回卡片
     await song_cmd.finish(
         Message(f"{build_card(card)}\n\n曲子我调不出来，只能给您递个名目。")
     )
+
+
+LOG = Path(__file__).resolve().parent.parent / "data" / "voice_probe.log"
+
+
+def probe(sec: int, size: int, result: str, err: str) -> None:
+    """记一条：这次发了多少秒，成没成。
+
+    QQ 语音条到底能有多长，官方没说，各家说法不一。与其猜，不如让它自己
+    记：跑一段时间翻日志，就能看出失败是从第几秒开始出现的。
+    """
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{sec}s\t"
+                    f"{size // 1024}KB\t{result}\t{err}\n")
+    except Exception:
+        pass
 
 
 async def search(keyword: str) -> list:

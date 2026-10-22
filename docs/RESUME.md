@@ -10,7 +10,7 @@
 在终端粘贴：
 
 ```bash
-sed -i 's/password: "你的密码"/password: ""/' /workspaces/qq-bot/cqhttp/config.yml && pkill go-cqhttp; echo CLEANED
+sed -i -e 's/password: "你的密码"/password: ""/' -e 's/protocol: 6/protocol: 2/' /workspaces/qq-bot/cqhttp/config.yml && pkill go-cqhttp; echo CLEANED
 ```
 
 出现 `CLEANED` 即可。
@@ -77,6 +77,7 @@ sed -i 's|OPENAI_API_KEY=|OPENAI_API_KEY=粘贴你的sk密钥|' /workspaces/qq-b
 
 | 问题 | 处理 |
 |---|---|
+| 二维码刷出来但手机扫了没反应 | 检查协议是不是 2：`grep protocol /workspaces/qq-bot/cqhttp/config.yml`，不是就改回 2 再重启 |
 | 扫码后提示"账号异常" | 风控，等 24 小时再试；或换号 |
 | 登录成功但发消息没反应 | 看 `tail -20 bot.log`；确认 bot 进程在跑（`ps aux \| grep main.py`）|
 | 发消息报 45 错误 | 需要签名服务器，回来后找我加配置 |

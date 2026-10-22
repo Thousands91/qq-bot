@@ -10,7 +10,7 @@ env = Env()
 
 # 默认配置
 defaults = {
-    "superusers": {},
+    "superusers": set(),
     "nickname": {"Bot", "机器人", "bot", "BOT"},
     "command_start": {"/", "!", "！"},
     "apscheduler_autostart": True,

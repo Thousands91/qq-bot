@@ -1,10 +1,21 @@
-nonebot2==2.4.0
-nonebot-adapter-onebot==2.4.4
+# NoneBot 2 核心 + FastAPI 驱动（必需，缺了启动即报错）
+nonebot2[fastapi]>=2.4.0
+nonebot-adapter-onebot>=2.4.4
 nonebot-plugin-apscheduler>=0.4.0
-openai>=1.10.0
+
+# HTTP / 异步
 aiohttp>=3.9.0
+aiohttp-socks>=0.8.0
+
+# AI 大模型（OpenAI 兼容接口）
+openai>=1.10.0
+
+# 配置
 python-dotenv>=1.0.0
 pytz>=2024.1
-googletrans==4.0.0-rc1
-aiohttp-socks>=0.8.0
+
+# 服务器
 uvicorn[standard]>=0.27.0
+
+# 说明：翻译插件已改为直接调 MyMemory 公开接口，
+# 不再需要 googletrans（它依赖 cgi，Python 3.13 起已移除该模块）

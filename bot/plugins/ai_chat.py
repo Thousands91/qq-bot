@@ -235,7 +235,16 @@ ai_chat = on_message(priority=99, block=False)
 
 @ai_chat.handle()
 async def _(bot: Bot, event: GroupMessageEvent, state: T_State):
-    if not ENABLE or not API_KEY:
+    if not ENABLE:
+        return
+
+    # 没配 Key 时不能静默吞掉：否则 @ 它毫无反应，看着像机器人死了
+    if not API_KEY and event.is_tome():
+        await ai_chat.finish(
+            Message("（他把书合上）我这会儿说不了话——柜上还没给灯添油。先翻翻别的吧。")
+        )
+
+    if not API_KEY:
         return
 
     if not event.is_tome():

@@ -12,6 +12,16 @@ GROUP = 123456789
 BASE = f"http://127.0.0.1:{PORT}"
 
 
+async def slow_ack(ws, echo, size):
+    """模拟真机：语音要转 silk 再上传，慢。超过 30 秒才回，看插件撑不撑得住。"""
+    await asyncio.sleep(32)
+    try:
+        await ws.send_json({"status": "ok", "retcode": 0,
+                            "data": {"message_id": 1}, "echo": echo})
+    except Exception:
+        pass
+
+
 async def ws_client(msgs):
     """连上反向 WS，把收到的 action 全记下来"""
     url = f"ws://127.0.0.1:{PORT}/onebot/v11/ws"
@@ -43,8 +53,20 @@ async def ws_client(msgs):
                                 text = str(msg)
                             print(f"   ← 机器人发消息 [{kind}] {text[:120]}")
                         if act and d.get("echo"):
-                            await ws.send_json({"status": "ok", "retcode": 0,
-                                                "data": {"message_id": 1}, "echo": d["echo"]})
+                            p = d.get("params") or {}
+                            msg = p.get("message")
+                            if isinstance(msg, list) and any(
+                                x.get("type") == "record" for x in msg
+                            ):
+                                seg = next(x for x in msg if x.get("type") == "record")
+                                f = (seg.get("data") or {}).get("file", "")
+                                asyncio.create_task(
+                                    slow_ack(ws, d["echo"], len(str(f)))
+                                )
+                            else:
+                                await ws.send_json({"status": "ok", "retcode": 0,
+                                                    "data": {"message_id": 1},
+                                                    "echo": d["echo"]})
 
             t = asyncio.create_task(reader())
             await asyncio.sleep(1.2)
@@ -62,7 +84,7 @@ async def ws_client(msgs):
                 }
                 print(f"→ 发送：{text}")
                 await ws.send_json(ev)
-                await asyncio.sleep(18)
+                await asyncio.sleep(45)
             t.cancel()
     return seen
 
@@ -83,7 +105,7 @@ async def main():
             if not line:
                 break
             s = line.decode("utf-8", "ignore").rstrip()
-            if any(k in s for k in ("ERROR", "SUCCESS]", "Launched", "Uvicorn", "Running", "❌")):
+            if any(k in s for k in ("ERROR", "SUCCESS]", "Launched", "Uvicorn", "Running", "❌", "Error", "error", "Trace", "File \"", "raise", "during")):
                 print("  [bot]", s)
 
     pt = asyncio.create_task(pump())

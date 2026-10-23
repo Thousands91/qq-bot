@@ -25,8 +25,8 @@ RANDOM_IMG_APIS = [
 ]
 
 image_search = on_command(
-    "色图",
-    aliases={"来点色图", "整点涩图", "来点图"},
+    "看图",
+    aliases={"找图", "来点图", "色图", "来点色图", "整点涩图"},
     priority=20,
     block=True,
 )

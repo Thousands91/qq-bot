@@ -22,6 +22,7 @@ CASES = [
     ("苏丹卡", True),
     ("百科全书", True),
     ("菜单", True),
+    ("看景", True),            # 真人摄影图命令
     ("今晚吃什么呢", False),
     ("/找书 三国演义", True),   # 走找书命令，不是关键词
 ]
@@ -65,10 +66,13 @@ async def main():
                     params = d.get("params") or {}
                     msg = params.get("message")
                     if isinstance(msg, list):
+                        # 图片段也算"回了话"——看景回复的是纯图片没有文字
+                        has_img = any(x.get("type") == "image" for x in msg)
                         t = "".join((x.get("data") or {}).get("text", "")
                                     for x in msg if x.get("type") == "text")
-                        if t.strip():
-                            got["text"] += t.strip() + " | "
+                        if t.strip() or has_img:
+                            got["text"] += (t.strip() + " " if t.strip() else "") + \
+                                           ("[图片] " if has_img else "")
                     if d.get("echo"):
                         await ws.send_json({"status": "ok", "retcode": 0,
                                             "data": {"message_id": 1},
@@ -92,7 +96,8 @@ async def main():
                                "card": "", "role": "member"},
                 }
                 await ws.send_json(ev)
-                await asyncio.sleep(3)
+                # 看景要先向 picsum 探图，图源慢（实测可达 15 秒+），等久一点
+                await asyncio.sleep(5 if text == "看景" else 3)
                 said = bool(got["text"].strip())
                 ok = (said == expect)
                 if not ok:

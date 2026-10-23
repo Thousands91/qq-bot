@@ -8,6 +8,8 @@
 """
 import base64
 import io
+import os
+import re
 import time
 from pathlib import Path
 
@@ -94,7 +96,7 @@ def board_image_msg(board: chess.Board) -> Message:
 # ---------------------------------------------------------------------------
 
 GAMES: dict[int, dict] = {}
-TIMEOUT = 10 * 60
+TIMEOUT = int(os.getenv("CHESS_TIMEOUT", "600"))  # 秒，测试时可覆盖
 
 
 def new_game(white_id: int) -> dict:
@@ -134,6 +136,10 @@ def game_over_text(board: chess.Board) -> str | None:
     return None
 
 
+def _time_text() -> str:
+    return f"{TIMEOUT // 60} 分钟" if TIMEOUT >= 120 else f"{TIMEOUT} 秒"
+
+
 def _timeout_text(group_id: int) -> str | None:
     g = GAMES.get(group_id)
     if not g:
@@ -142,10 +148,10 @@ def _timeout_text(group_id: int) -> str | None:
         return None
     if g["black"] is None:
         del GAMES[group_id]
-        return "等了十分钟也没人来接棋，棋盘先收了。想下再 @我。"
+        return f"等了 {_time_text()} 也没人来接棋，棋盘先收了。想下再 @我。"
     loser = g["white"] if g["board"].turn == chess.WHITE else g["black"]
     del GAMES[group_id]
-    return (f"超过 10 分钟没人落子，{at(loser)} 判负，本局结束。"
+    return (f"超过 {_time_text()} 没人落子，{at(loser)} 判负，本局结束。"
             "店里的规矩：落子就得想着它。")
 
 # ---------------------------------------------------------------------------
@@ -164,7 +170,7 @@ INTRO = (
 async def _is_start(bot, event, state) -> bool:
     if not isinstance(event, MessageEvent):
         return False
-    text = event.get_plaintext().strip()
+    text = re.sub(r"[\s，。！？、,.!?~～……]+", "", event.get_plaintext().strip())
     if text != "国际象棋":
         return False
     # @机器人后，bot 自己的 at 段已被框架剥掉，to_me 即代表 @过我
@@ -219,11 +225,11 @@ async def _(event: MessageEvent, arg: Message = CommandArg()):
     g = GAMES.get(group_id)
     if not g:
         return  # 没棋局就沉默，免得日常说"走吧"也被搭理
-    if g["black"] is None:
-        await move_cmd.finish("还差一位执黑的，让他来 @我 报「国际象棋」。")
     t = _timeout_text(group_id)
     if t:
         await move_cmd.finish(t)
+    if g["black"] is None:
+        await move_cmd.finish("还差一位执黑的，让他来 @我 报「国际象棋」。")
 
     text = arg.extract_plain_text().strip()
     if not text:

@@ -30,6 +30,7 @@ async def main():
     env = dict(os.environ)
     env["PORT"] = str(PORT)
     env["ONEBOT_ACCESS_TOKEN"] = "test"
+    env["CHESS_TIMEOUT"] = "30"  # 超时缩短到 30 秒，可测懒判负
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "main.py", cwd="bot", env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
@@ -77,7 +78,7 @@ async def main():
             async def step(name, user_id, segs, expect_img, expect_kw=None):
                 got["segs"].clear()
                 await ws.send_json(group_msg(user_id, segs))
-                await asyncio.sleep(2.5)
+                await asyncio.sleep(1.2)
                 reply = got["segs"]
                 if not reply:
                     if expect_kw is False and not expect_img:
@@ -110,7 +111,7 @@ async def main():
                     "raw_message": text, "font": 0,
                     "sender": {"user_id": user_id, "nickname": "t"},
                 })
-                await asyncio.sleep(2.5)
+                await asyncio.sleep(1.2)
                 text_r = "".join((sg.get("data") or {}).get("text", "")
                                  for msg in got["segs"] for sg in msg if sg.get("type") == "text")
                 ok = expect_kw in text_r
@@ -150,6 +151,40 @@ async def main():
             await step("走 e5", B, T("走 e5"), True, "")
             await step("走 g4", A, T("走 g4"), True, "")
             await step("走 Qh4#(将死)", B, T("走 Qh4#"), True, "将死")
+
+            # ---- 补测：特殊走法与边界 ----
+            await step("再开局(将死后)", A, START(), False, "执白")
+            await step("C 接黑(第三人)", 555, START(), True, "执白先行")
+            # 意大利开局 + 王车易位
+            await step("e4", A, T("走 e4"), True, "")
+            await step("e5", 555, T("走 e5"), True, "")
+            await step("Nf3", A, T("走 Nf3"), True, "")
+            await step("Nc6", 555, T("走 Nc6"), True, "")
+            await step("Bc4", A, T("走 Bc4"), True, "")
+            await step("Bc5", 555, T("走 Bc5"), True, "")
+            await step("白方 O-O 易位", A, T("走 O-O"), True, "")
+            await step("黑方 Nf6", 555, T("走 Nf6"), True, "")
+            await step("白 h3", A, T("走 h3"), True, "")
+            await step("黑方 O-O 易位", 555, T("走 O-O"), True, "")
+            # 吃过路兵：d2d4 c7c5 d4d5 c5 想吃过路兵需要黑走 e7e5 后 dxe6
+            await step("白 a4", A, T("走 a4"), True, "")
+            await step("黑 a6", 555, T("走 a6"), True, "")
+            await step("白 a5", A, T("走 a5"), True, "")
+            await step("黑 b5(冲双格)", 555, T("走 b5"), True, "")
+            await step("axb6 吃过路兵", A, T("走 axb6"), True, "")
+            # 认输：黑方认输
+            await step("黑方认输", 555, T("认输"), False, "投子认负")
+            # 别名「不下了」
+            await step("再开局", A, START(), False, "执白")
+            await step("B 接黑", B, START(), True, "执白先行")
+            await step("白方「不下了」", A, T("不下了"), False, "棋收了")
+            # 等待 9 秒触发懒判负：白方开局后不接黑，8 秒超时
+            await step("开局后晾着", A, START(), False, "执白")
+            await asyncio.sleep(35)
+            await step("超时后走子触发清理", A, T("走 e4"), False, "也没人来接棋")
+            # 带标点开局
+            await step("「国际象棋！」带标点", A, ATB() + T("国际象棋！"), False, "执白")
+            await step("清场(收掉等待中的局)", A, T("结束棋局"), False, "棋收了")
 
             rt.cancel()
             print(f"\n{'✅ 全部通过' if bad == 0 else f'❌ {bad} 项失败'}")

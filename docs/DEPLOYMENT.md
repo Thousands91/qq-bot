@@ -119,9 +119,9 @@ async def _(event: GroupMessageEvent):
 
 如果某个平台不是 100% 兼容 openai sdk，把 `ai_chat.py` 的 `call_llm` 替换为它的 SDK 调用即可。
 
-### 修改欢迎词 / 关键词
+### 修改关键词回复
 
-直接编辑 `bot/plugins/welcome.py` 和 `bot/plugins/keyword_reply.py` 的对应常量，保存后：
+直接编辑 `bot/plugins/keyword_reply.py` 的对应常量，保存后：
 
 ```bash
 docker compose restart bot

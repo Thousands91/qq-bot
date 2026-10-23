@@ -19,3 +19,4 @@ uvicorn[standard]>=0.27.0
 
 # 说明：翻译插件已改为直接调 MyMemory 公开接口，
 # 不再需要 googletrans（它依赖 cgi，Python 3.13 起已移除该模块）
+python-chess>=1.10

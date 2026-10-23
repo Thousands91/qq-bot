@@ -17,7 +17,7 @@ from typing import Deque, Dict, List
 
 from nonebot import on_message
 from nonebot.rule import command
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, PrivateMessageEvent
 from nonebot.typing import T_State
 
 # 引入人格设定（bot/persona）
@@ -242,20 +242,22 @@ ai_chat = on_message(priority=99, block=False)
 
 
 @ai_chat.handle()
-async def _(bot: Bot, event: GroupMessageEvent, state: T_State):
+async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_State):
     if not ENABLE:
         return
 
-    # 没配 Key 时不能静默吞掉：否则 @ 它毫无反应，看着像机器人死了
-    if not API_KEY and event.is_tome():
-        await ai_chat.finish(
-            Message("（他把书合上）我这会儿说不了话——柜上还没给灯添油。先翻翻别的吧。")
-        )
-
-    if not API_KEY:
+    private = isinstance(event, PrivateMessageEvent)
+    # 私聊里每条消息都算"对它说"；群聊里只认 @
+    if not private and not event.is_tome():
         return
 
-    if not event.is_tome():
+    # 没配 Key：群里 @ 了要吭一声（否则像机器人死了）；
+    # 私聊则保持沉默——每句话都回"没添油"太烦人
+    if not API_KEY:
+        if not private:
+            await ai_chat.finish(
+                Message("（他把书合上）我这会儿说不了话——柜上还没给灯添油。先翻翻别的吧。")
+            )
         return
 
     text = event.get_plaintext().strip()
@@ -266,7 +268,8 @@ async def _(bot: Bot, event: GroupMessageEvent, state: T_State):
     if text.startswith(("/", "!", "！")):
         return
 
-    key = (event.group_id, event.user_id)
+    # 私聊没有群号，记忆桶用 0 占位
+    key = (getattr(event, "group_id", 0), event.user_id)
     msgs: List[dict] = HISTORY[key]
 
     # 问吃/喝的：先抽好一样，塞进这一轮的提示里，免得模型报菜单。
@@ -340,7 +343,7 @@ clear = on_message(command("清空记忆", "重置记忆"), priority=10, block=T
 
 
 @clear.handle()
-async def _(bot: Bot, event: GroupMessageEvent):
-    HISTORY.pop((event.group_id, event.user_id), None)
+async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
+    HISTORY.pop((getattr(event, "group_id", 0), event.user_id), None)
     await clear.finish("记忆已清空，重新谈吧。")
 

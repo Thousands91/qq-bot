@@ -22,7 +22,7 @@ from pathlib import Path
 import aiohttp
 from nonebot import on_command
 from nonebot.exception import FinishedException
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 
 song_cmd = on_command("点歌", aliases={"听歌", "来首歌"}, priority=20, block=True)
@@ -45,7 +45,7 @@ BAD_WORDS = ("伴奏", "纯音乐", "ktv", "instrumental", "inst.", "remix", "dj
 
 
 @song_cmd.handle()
-async def _(event: GroupMessageEvent, arg: Message = CommandArg()):
+async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = CommandArg()):
     # 命令前缀可能是空串（裸词"点歌"就能触发），这时 get_plaintext() 里
     # 没有"/点歌"可替换，整句会被当成歌名——所以必须走 CommandArg
     kw = arg.extract_plain_text().strip()

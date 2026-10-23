@@ -11,7 +11,7 @@ from datetime import datetime
 
 import aiohttp
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
 from nonebot.params import CommandArg
 
 KEY = os.getenv("QWEATHER_KEY", "")
@@ -45,7 +45,7 @@ def wind_dir(deg: float) -> str:
 
 
 @weather.handle()
-async def _(event: GroupMessageEvent, arg: Message = CommandArg()):
+async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = CommandArg()):
     # 用 CommandArg 而不是自己 replace 前缀：命令前缀可以是空的（裸词触发），
     # 这时 get_plaintext() 里根本没有 "/天气" 可替换，"天气 北京"整个会被当城市名。
     city = arg.extract_plain_text().strip()

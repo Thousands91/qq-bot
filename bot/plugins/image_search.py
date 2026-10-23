@@ -40,10 +40,12 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
 
     if item:
         url, is_r18 = item
-        # 群聊里万一漏出 R18，拦死再重取一次全年龄
+        # 群聊里绝不能出 R18：拦掉重取一次，重取到的若还带 R18 标记就一条都不发
         if is_r18 and not private:
             item = await fetch_lolicon(r18=0)
-            url = item[0] if item else ""
+            url = ""
+            if item and not item[1]:
+                url = item[0]
     else:
         url = ""
 

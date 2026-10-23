@@ -12,6 +12,7 @@ from datetime import datetime
 import aiohttp
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.params import CommandArg
 
 KEY = os.getenv("QWEATHER_KEY", "")
 # 和风天气 2024 年起改成"每个账号一个专属域名"（形如 xxxxx.re.qweatherapi.com），
@@ -44,11 +45,10 @@ def wind_dir(deg: float) -> str:
 
 
 @weather.handle()
-async def _(event: GroupMessageEvent):
-    city = event.get_plaintext().strip()
-    for p in ("/天气", "!天气", "！天气"):
-        city = city.replace(p, "", 1)
-    city = city.strip()
+async def _(event: GroupMessageEvent, arg: Message = CommandArg()):
+    # 用 CommandArg 而不是自己 replace 前缀：命令前缀可以是空的（裸词触发），
+    # 这时 get_plaintext() 里根本没有 "/天气" 可替换，"天气 北京"整个会被当城市名。
+    city = arg.extract_plain_text().strip()
 
     if not city:
         await weather.finish("您想去哪里？说个地名，我替您看一看天。")

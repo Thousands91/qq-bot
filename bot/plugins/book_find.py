@@ -44,6 +44,7 @@ from typing import List
 import aiohttp
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.params import CommandArg
 
 find_cmd = on_command(
     "找书", aliases={"淘书", "找本书", "有这本书吗"}, priority=20, block=True
@@ -98,12 +99,10 @@ DL_LINES = [
 
 
 @find_cmd.handle()
-async def _(event: GroupMessageEvent):
-    raw = event.get_plaintext().strip()
-    for p in ("/找书", "!找书", "！找书", "/淘书", "!淘书", "/找本书",
-              "/有这本书吗", "!有这本书吗"):
-        raw = raw.replace(p, "", 1)
-    raw = raw.strip()
+async def _(event: GroupMessageEvent, arg: Message = CommandArg()):
+    # 前缀可能为空串（"找书"裸词就能触发），此时 get_plaintext() 里没有
+    # "/找书" 可替换，整句会被当成书名。参数交给 CommandArg 出。
+    raw = arg.extract_plain_text().strip()
 
     # "山海经 下载" / "下载 红楼梦" 都行
     want_dl = False

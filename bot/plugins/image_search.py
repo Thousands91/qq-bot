@@ -1,8 +1,8 @@
 """
 随机图片
 
-- 私聊：走 Lolicon，开放 R18
-- 群聊：只走全年龄，R18 结果在代码层直接拦掉
+- 看图：二次元插画（Lolicon）。私聊开放 R18，群聊只走全年龄
+- 看景：真人摄影图（picsum.photos，风景/静物，全年龄）
 
 这个区分不靠参数自觉，靠 isinstance 判定会话类型。
 """
@@ -55,6 +55,24 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
         return
 
     await image_search.finish(Message(f"[CQ:image,file={url},cache=0]"))
+
+
+# —— 看景：真人摄影图，全年龄 ——
+scenery = on_command(
+    "看景",
+    aliases={"风景", "来点风景", "看风景", "摄影"},
+    priority=20,
+    block=True,
+)
+
+
+@scenery.handle()
+async def _():
+    # picsum：真实摄影图库。用 seed URL：同一链接永远返回同一张图。
+    # 不做预检——图能不能拉成功由 QQ 的服务器说了算，机器人这边探一遍只是白等
+    seed = random.randint(0, 999999)
+    url = f"https://picsum.photos/seed/{seed}/1200/800.jpg"
+    await scenery.finish(Message(f"[CQ:image,file={url},cache=0]"))
 
 
 async def fetch_lolicon(r18: int = 0):

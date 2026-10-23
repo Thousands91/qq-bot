@@ -14,6 +14,9 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
 ENABLE = os.getenv("ENABLE_KEYWORD_REPLY", "true").lower() == "true"
 
 # ===================== 关键词 → 一句话 =====================
+# 键用元组可以把几种说法并成一条，回复池共用。
+# 早先"书"是单字关键词，群里聊到"书架""说明书""我在看书"全都会被叫出来，
+# 太吵。改成只认组合（找书、想看书、看书吗），单说一个"书"字不再触发。
 REPLIES = {
     "早上好": [
         "早安，今日开卷，宜读些轻的。",
@@ -59,21 +62,35 @@ REPLIES = {
         "百科全书是我和我的家族一直在编纂的东西。",
         "它必须是我亲眼所见，不能是道听途说。",
     ],
-    "书": [
+    # 只认组合，不认单字"书"
+    ("找书", "想看书", "看书吗", "有什么书", "推荐本"): [
         "书是好东西，可惜读完就住在我脑子里了。",
         "想找什么书？说说看，或许我记得。",
+        "报个书名，我给您翻翻柜子。",
     ],
     "阿萨尔": [
         "我在。",
         "您叫我，是有书要找？",
     ],
     "菜单": [
-        "📖 翻书 / 问天 / 看图谱 / 找我说话，四件事。",
+        # 这里的命令必须和实际插件对得上，写错了群友照着敲会没反应
+        "📖 店里这几样，您挑：\n"
+        "　找书 /淘书 /找本书 —— 我帮您翻柜子\n"
+        "　点歌 /听歌 /来首歌 —— 点一曲，能唱就唱给您听\n"
+        "　抽签 /运势 /翻书 /折卡 —— 问个吉凶\n"
+        "　天气 —— 看天时\n"
+        "　翻译 —— 译一段话\n"
+        "　色图 /来点色图 /整点涩图 —— 看图谱",
     ],
 }
 # ============================================================
 
 kw_reply = on_message(priority=80, block=False)
+
+
+def _keys(item) -> list:
+    """关键词可以是字符串，也可以是一组说法。统一成 list 方便遍历。"""
+    return [item] if isinstance(item, str) else list(item)
 
 
 @kw_reply.handle()
@@ -84,15 +101,26 @@ async def _(event: GroupMessageEvent):
     text = event.get_plaintext().strip().lower()
     if not text:
         return
+    # 带命令前缀的消息交给正经命令处理，不在这里抢答
+    if text[0] in ("/", "!", "！"):
+        return
+
+    # 长词优先：发"群主你好"应该回群主那句，而不是"你好"。
+    # 早先是按字典顺序比，谁写在前面谁先中，纯看运气。
+    pairs = []
+    for item, replies in REPLIES.items():
+        for kw in _keys(item):
+            pairs.append((kw, replies))
+    pairs.sort(key=lambda p: len(p[0]), reverse=True)
 
     # 精确匹配优先
-    for kw, replies in REPLIES.items():
+    for kw, replies in pairs:
         if text == kw.lower():
             await kw_reply.finish(Message(random.choice(replies)))
             return
 
-    # 包含匹配
-    for kw, replies in REPLIES.items():
+    # 再退到包含匹配
+    for kw, replies in pairs:
         if kw.lower() in text:
             await kw_reply.finish(Message(random.choice(replies)))
             return

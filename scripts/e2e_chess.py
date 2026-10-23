@@ -100,11 +100,34 @@ async def main():
                     bad += 1
                 print(f"{mark} {name}: {text[:70]}  [图片x{imgs}]")
 
+            async def step_p(name, user_id, text, expect_kw):
+                got["segs"].clear()
+                await ws.send_json({
+                    "time": 0, "self_id": BOT_UIN, "post_type": "message",
+                    "message_type": "private", "sub_type": "friend",
+                    "message_id": 4001, "user_id": user_id,
+                    "message": [{"type": "text", "data": {"text": text}}],
+                    "raw_message": text, "font": 0,
+                    "sender": {"user_id": user_id, "nickname": "t"},
+                })
+                await asyncio.sleep(2.5)
+                text_r = "".join((sg.get("data") or {}).get("text", "")
+                                 for msg in got["segs"] for sg in msg if sg.get("type") == "text")
+                ok = expect_kw in text_r
+                mark = "✓" if ok else "✗"
+                if not ok: nonlocal bad; bad += 1
+                print(f"{mark} {name}: {text_r[:60]}")
+
             T = lambda t: [{"type": "text", "data": {"text": t}}]
             ATB = lambda: [{"type": "at", "data": {"qq": str(BOT_UIN)}}]
             START = lambda: ATB() + T("国际象棋")
 
             await step("裸「国际象棋」没@我", A, T("国际象棋"), False, False)
+            await step("没棋局时说「走吧」", A, T("走吧"), False, False)
+            await step("没棋局时说「走 e4」", A, T("走 e4"), False, False)
+            await step("没棋局时说「认输」", A, T("认输"), False, False)
+            await step("没棋局时说「结束棋局」", A, T("结束棋局"), False, False)
+            await step_p("私聊开局被拒", A, "国际象棋", "来群里")
             await step("A @我 开局(占白)", A, START(), False, "执白")
             await step("A 再报一次", A, START(), False, "黑棋得让别人来")
             await step("B @我 接黑(开局)", B, START(), True, "执白先行")

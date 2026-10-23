@@ -55,7 +55,6 @@ cd /workspaces/qq-bot/bot && nohup python main.py > ../bot.log 2>&1 & sleep 5 &&
 - `/抽签` → 今日运势
 - `@机器人 你好` → AI 回复（需先配置 AI Key，见下）
 - `/天气 北京` → 天气
-- 群里有人进群 → 自动欢迎
 
 ---
 

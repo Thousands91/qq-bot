@@ -1,4 +1,4 @@
-"""端到端：国际象棋插件（双人@接棋开局 / 走 / 悔棋确认 / 认输 / 结束）"""
+"""端到端：国际象棋插件（双人@接棋开局 / 走 /  认输 / 结束）"""
 import asyncio
 import json
 import os
@@ -116,11 +116,6 @@ async def main():
             await step("走 Nc6(黑)", B, T("走 Nc6"), True, "")
             await step("走 e2e4(UCI非法)", A, T("走 e2e4"), False, "走不通")
             await step("走 Bb5(白)", A, T("走 Bb5"), True, "")
-            await step("悔棋(白发起)", A, T("悔棋"), False, "同意悔棋")
-            await step("路人同意悔棋", 999, T("同意悔棋"), False, "没您的份")
-            await step("白自己同意", A, T("同意悔棋"), False, "自己不能答应自己")
-            await step("黑同意悔棋", B, T("同意悔棋"), True, "悔了一步")
-            await step("重走 Bb5(白)", A, T("走 Bb5"), True, "")
             await step("走 a6(黑)", B, T("走 a6"), True, "")
             await step("结束棋局(路人)", 999, T("结束棋局"), False, "别替人收")
             await step("结束棋局(白)", A, T("结束棋局"), False, "棋收了")

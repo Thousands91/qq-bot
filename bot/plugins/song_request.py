@@ -21,7 +21,9 @@ from pathlib import Path
 
 import aiohttp
 from nonebot import on_command
+from nonebot.exception import FinishedException
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.params import CommandArg
 
 song_cmd = on_command("点歌", aliases={"听歌", "来首歌"}, priority=20, block=True)
 
@@ -43,11 +45,10 @@ BAD_WORDS = ("伴奏", "纯音乐", "ktv", "instrumental", "inst.", "remix", "dj
 
 
 @song_cmd.handle()
-async def _(event: GroupMessageEvent):
-    kw = event.get_plaintext().strip()
-    for p in ("/点歌", "!点歌", "！点歌", "/听歌", "!听歌", "/来首歌", "!来首歌"):
-        kw = kw.replace(p, "", 1)
-    kw = kw.strip()
+async def _(event: GroupMessageEvent, arg: Message = CommandArg()):
+    # 命令前缀可能是空串（裸词"点歌"就能触发），这时 get_plaintext() 里
+    # 没有"/点歌"可替换，整句会被当成歌名——所以必须走 CommandArg
+    kw = arg.extract_plain_text().strip()
 
     if not kw:
         await song_cmd.finish("想听什么？说个歌名，或者一句歌词也行。")
@@ -81,6 +82,9 @@ async def _(event: GroupMessageEvent):
             await song_cmd.send(MessageSegment.record(audio), _timeout=_t)
             probe(sec, len(audio), "ok", "")
             return
+        except FinishedException:
+            # finish() 是靠抛这个异常结束的，别当成"发送失败"记进日志
+            raise
         except BaseException as e:
             # BaseException 不是手滑：音频往 WS 里塞是同步的，长音频能卡住
             # 整个事件循环，卡太久会被 CancelledError 打断。这种也得兜住，

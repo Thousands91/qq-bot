@@ -261,23 +261,31 @@ async def _(bot: Bot, event: GroupMessageEvent, state: T_State):
     key = (event.group_id, event.user_id)
     msgs: List[dict] = HISTORY[key]
 
-    # 问吃/喝的：先抽好一样，塞进这一轮的提示里，免得模型报菜单
+    # 问吃/喝的：先抽好一样，塞进这一轮的提示里，免得模型报菜单。
+    # 注意 hint 只发给模型，不进 HISTORY——否则后面每轮都带着"（提醒：…）"，
+    # 模型会一直以为对方还在点菜。
     picked = pick_food_or_drink(text, key)
     if picked:
         hint = f"{text}\n\n（提醒：对方是让你挑一样。这一样就定作「{picked}」，直接说它，别报菜单。）"
-        msgs.append({"role": "user", "content": hint})
+        to_model = list(msgs) + [{"role": "user", "content": hint}]
     else:
-        msgs.append({"role": "user", "content": text})
+        to_model = list(msgs) + [{"role": "user", "content": text}]
 
+    # finish() 是靠抛 FinishedException 结束的，不能包在 try 里，
+    # 否则会被下面的 except 截下来再补一句"灯灭了"。
     try:
-        answer = await call_llm(list(msgs))
+        answer = await call_llm(to_model)
     except Exception as e:
         await ai_chat.finish(Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络"))
+        return
 
-    msgs.append({"role": "assistant", "content": answer})
-
-    # 硬性截断：最多三句（模型不听话时兜底）
+    # 硬性截断：最多三句（模型不听话时兜底）。
+    # 先进历史再截断的话，历史里存的是"用户没看见的那半句"，
+    # 后面追问时模型会以为自己说过——所以先截断，存和发用同一份。
     answer = trim_to_sentences(answer, max_sentences=3)
+
+    msgs.append({"role": "user", "content": text})
+    msgs.append({"role": "assistant", "content": answer})
 
     await ai_chat.finish(Message(answer))
 

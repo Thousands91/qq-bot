@@ -43,7 +43,7 @@ from typing import List
 
 import aiohttp
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 
 find_cmd = on_command(
@@ -99,7 +99,7 @@ DL_LINES = [
 
 
 @find_cmd.handle()
-async def _(event: GroupMessageEvent, arg: Message = CommandArg()):
+async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = CommandArg()):
     # 前缀可能为空串（"找书"裸词就能触发），此时 get_plaintext() 里没有
     # "/找书" 可替换，整句会被当成书名。参数交给 CommandArg 出。
     raw = arg.extract_plain_text().strip()
@@ -432,7 +432,7 @@ def _total_size(headers) -> int:
     return 0
 
 
-async def send_txt(event: GroupMessageEvent, book: dict) -> bool:
+async def send_txt(event: GroupMessageEvent | PrivateMessageEvent, book: dict) -> bool:
     """把 txt 发进群。成功返回 True。"""
     data, err = await fetch_txt(book["id"])
     if not data:

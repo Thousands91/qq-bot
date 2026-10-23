@@ -10,7 +10,7 @@ import random
 import re
 
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
 
 ENABLE = os.getenv("ENABLE_KEYWORD_REPLY", "true").lower() == "true"
 
@@ -143,7 +143,7 @@ def _match(text: str):
 
 
 @kw_reply.handle()
-async def _(event: GroupMessageEvent):
+async def _(event: GroupMessageEvent | PrivateMessageEvent):
     if not ENABLE:
         return
 

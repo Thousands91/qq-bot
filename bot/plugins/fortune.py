@@ -15,7 +15,7 @@ import random
 import datetime
 
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
 
 fortune = on_command("抽签", aliases={"运势", "翻书", "折卡"}, priority=20, block=True)
 
@@ -240,7 +240,7 @@ def tone_group(key: str) -> str:
 
 
 @fortune.handle()
-async def _(event: GroupMessageEvent):
+async def _(event: GroupMessageEvent | PrivateMessageEvent):
     today = datetime.date.today()
     # (QQ + 日期) 做种子 —— 同一人当天固定同一签，抽不到第二次
     rand = random.Random(f"azar-{today.isoformat()}-{event.user_id}")

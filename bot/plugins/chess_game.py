@@ -3,7 +3,7 @@
 
 开局：第一位玩家 @机器人 说「国际象棋」占白方，第二位玩家 @机器人 说「国际象棋」接黑方，然后开下
 走子：走 e4 / Nf3 / O-O（SAN）或 e2e4（UCI）
-其他：悔棋（需对手同意）、认输、结束棋局
+其他：认输、结束棋局
 每群同时一局；超过 10 分钟没人落子，轮到谁走谁判负（下次交互时懒结算）。
 """
 import base64
@@ -104,7 +104,6 @@ def new_game(white_id: int) -> dict:
         "black": None,          # 等第二位玩家来接
         "last_move_ts": time.time(),
         "history": [],
-        "pending_undo": None,   # 请求悔棋的一方
     }
 
 
@@ -157,7 +156,7 @@ INTRO = (
     "先说走法：「走 e4」的意思是把 e 列第 4 格的兵走到 e4 那个格——"
     "列从左到右是 a 到 h，行从下到上是 1 到 8，白方在下面。\n"
     "走马就是「走 Nf3」，王车易位是「走 O-O」。每走一步，我都把新棋盘画给您。\n"
-    "不想下了可以「认输」或「结束棋局」；悔棋得对方点头才算数。"
+    "不想下了可以「认输」或「结束棋局」。落子无悔，想好再发。"
 )
 
 
@@ -207,8 +206,6 @@ async def _(event: MessageEvent):
 
 move_cmd = on_command("走", priority=20, block=True)
 resign_cmd = on_command("认输", priority=20, block=True)
-undo_cmd = on_command("悔棋", priority=20, block=True)
-agree_undo_cmd = on_command("同意悔棋", priority=20, block=True)
 end_cmd = on_command("结束棋局", aliases={"不下了"}, priority=20, block=True)
 
 
@@ -249,7 +246,6 @@ async def _(event: MessageEvent, arg: Message = CommandArg()):
     g["history"].append((board.fen(), g["last_move_ts"]))
     board.push(move)
     g["last_move_ts"] = time.time()
-    g["pending_undo"] = None
 
     over = game_over_text(board)
     if over:
@@ -275,42 +271,6 @@ async def _(event: MessageEvent):
     await resign_cmd.finish(
         at(event.user_id) + " 投子认负。棋和账一样，认了就翻篇，再来就是新的一局。")
 
-
-@undo_cmd.handle()
-async def _(event: MessageEvent):
-    group_id = gid_of(event)
-    g = GAMES.get(group_id)
-    if not g or g["black"] is None:
-        await undo_cmd.finish("没有摆着的棋。")
-    if event.user_id not in (g["white"], g["black"]):
-        await undo_cmd.finish("这盘棋没您的份。")
-    if not g["history"]:
-        await undo_cmd.finish("一手都还没走，悔什么。")
-    if g["pending_undo"] and g["pending_undo"] != event.user_id:
-        await undo_cmd.finish("已经有人在等对方点头了，您发「同意悔棋」或「结束棋局」都行。")
-    g["pending_undo"] = event.user_id
-    other = g["black"] if event.user_id == g["white"] else g["white"]
-    await undo_cmd.finish(
-        at(event.user_id) + " 想悔一步。" + at(other) + " 点头就发「同意悔棋」。"
-        "按正经比赛的规矩这棋落了就不能悔，店里休闲，您俩商量着来。")
-
-
-@agree_undo_cmd.handle()
-async def _(event: MessageEvent):
-    group_id = gid_of(event)
-    g = GAMES.get(group_id)
-    if not g or not g["pending_undo"]:
-        await agree_undo_cmd.finish("没人悔棋，点哪门子头。")
-    if event.user_id == g["pending_undo"]:
-        await agree_undo_cmd.finish("自己不能答应自己，等对手发「同意悔棋」。")
-    if event.user_id not in (g["white"], g["black"]):
-        await agree_undo_cmd.finish("这盘棋没您的份。")
-    fen, ts = g["history"].pop()
-    g["board"] = chess.Board(fen)
-    g["last_move_ts"] = time.time()
-    g["pending_undo"] = None
-    await agree_undo_cmd.finish(
-        board_image_msg(g["board"]) + "悔了一步，接着来。下不为例啊。")
 
 
 @end_cmd.handle()

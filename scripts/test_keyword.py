@@ -1,7 +1,8 @@
-"""校验关键词触发：哪些该触发、哪些不该触发
+"""校验关键词触发：同义词整句匹配，不中即沉默
 
-关键词回复最容易出的问题是"误触"——群里正常聊天，机器人突然插一句。
-所以这个脚本一半用例是"不该触发"。
+触发规则是"整句等于关键词（允许后跟语气词/称呼）"，没有包含匹配。
+这个脚本一半用例是"不该触发"——误触是历史上真实发生过两次的毛病
+（单字"书"、"今天早上好冷啊"撞"早上好"），每次改都跑一遍这里。
 
 用法：
     python3 scripts/test_keyword.py
@@ -14,78 +15,93 @@ SRC = Path(__file__).resolve().parent.parent / "bot" / "plugins" / "keyword_repl
 
 # (消息, 期望命中的关键词或 None)
 CASES = [
-    # —— 该触发的 ——
+    # —— 同义词变体，都该触发 ——
+    # 期望值写的是"实际命中的那个同义词"，不是组名——
+    # 命中哪个变体不重要，重要的是落到同一个回复池。
+    ("早上好", "早上好"),
+    ("早安", "早安"),
+    ("早", "早"),
+    ("早啊", "早啊"),
+    ("早上好啊", "早上好啊"),
+    ("早上好！", "早上好"),           # 标点不算
+    ("早上好呀朋友们", "早上好呀"),    # 表里有"早上好呀"，长词优先
+    ("早安，各位！", "早安"),
+    ("晚上好", "晚上好"),
+    ("晚安啦", "晚安啦"),
+    ("睡了", "睡了"),
     ("你好", "你好"),
-    # 同长度时"你好"排在前面，这是预期行为（回"您好"也没什么不对）
-    ("群主你好啊", "你好"),
-    ("今天早上好冷", "早上好"),
-    ("晚安啦", "晚安"),
-    ("我谢谢你了", "谢谢"),
-    ("苏丹卡怎么折", "苏丹卡"),     # 长词优先，不该回"苏丹"
-    ("杀戮卡要不要留", "杀戮卡"),
-    ("他在编百科全书", "百科全书"),
+    ("您好", "您好"),
+    ("hi", "hi"),
+    ("Hello", "hello"),              # 大小写
+    ("哈喽", "哈喽"),
+    ("你好呀老板", "你好"),
+    ("谢谢", "谢谢"),
+    ("多谢", "多谢"),
+    ("感谢老板", "感谢"),
+    ("谢谢你", "谢谢"),
+
+    # —— 其它关键词，整句触发 ——
+    ("苏丹", "苏丹"),
+    ("苏丹卡", "苏丹卡"),             # 长词优先
+    ("杀戮卡", "杀戮卡"),
+    ("百科全书", "百科全书"),
     ("阿萨尔", "阿萨尔"),
     ("菜单", "菜单"),
-    # "来首歌"是点歌命令的别名，不该被关键词插件抢。
-    # 这里模拟的是"没带 / 前缀时是否会被关键词吃下"——答案是会，
-    # 但 on_command 的优先级更高，实际不会冲突。
-    ("来首歌", None),
+    ("找书", "找书"),
 
-    # —— 不该触发的 ——
-    ("这本书不错", None),           # 原来会触发"书"，现在不会
+    # —— 不该触发的（这是重点） ——
+    ("今天早上好冷啊", None),         # 历史 bug：包含匹配时代会触发
+    ("早上好困", None),
+    ("这早上好无聊", None),
+    ("咱们晚上好吵", None),
+    ("你好好休息", None),
+    ("晚安之前", None),
+    ("他说了声谢谢就走了", None),
+    ("今天早上吃什么，好吃吗？", None),
+    ("这本书不错", None),
     ("书架上落灰了", None),
     ("看说明书", None),
-    ("今晚月色很好", None),
-    ("/找书 三体", None),           # 带命令前缀不抢答
-    ("!点歌 晴天", None),
-    ("今天下雨了", None),
+    ("苏丹红是什么", None),           # 苏丹红是色素；包含匹配时代会误触
+    ("各位早上好", None),             # 前置称呼不认——这是已知代价
+    ("群主今天没来", None),           # 包含匹配时代会触发
+    ("我在看阿萨尔那本书", None),
+    ("帮我找书", None),              # 要触发请用 /找书 命令
+    ("今晚吃什么呢", None),
     ("随便说点什么", None),
+    ("/找书 三体", None),            # 命令前缀不抢
+    ("!点歌 晴天", None),
 ]
 
 
 def load():
     text = SRC.read_text(encoding="utf-8")
-    src = re.search(r"REPLIES = \{.*?\n\}\n", text, re.S).group(0)
     ns = {"random": __import__("random")}
-    exec(src, ns)
-    exec(re.search(r"def _keys.*?return .*?\n", text, re.S).group(0), ns)
+    exec("import re", ns)
+    exec(re.search(r"REPLIES = \{.*?\n\}\n", text, re.S).group(0), ns)
+    exec(re.search(r"TAIL_WORDS = \[.*?\]\n", text, re.S).group(0), ns)
+    exec(re.search(r"def _keys.*?return \[item\] if.*?\n", text, re.S).group(0), ns)
+    exec(re.search(r"def _match.*?(?=\n@kw_reply|\n\ndef )", text, re.S).group(0), ns)
     return ns
-
-
-def simulate(text, replies, keys):
-    """照抄 handler 的判断逻辑，不启动 nonebot。"""
-    t = text.strip().lower()
-    if not t or t[0] in ("/", "!", "！"):
-        return None
-    pairs = []
-    for item, rs in replies.items():
-        for kw in keys(item):
-            pairs.append((kw, rs))
-    pairs.sort(key=lambda p: len(p[0]), reverse=True)
-    for kw, rs in pairs:
-        if t == kw.lower():
-            return kw
-    for kw, rs in pairs:
-        if kw.lower() in t:
-            return kw
-    return None
 
 
 def main():
     ns = load()
-    replies, keys = ns["REPLIES"], ns["_keys"]
+    match = ns["_match"]
     bad = []
     for msg, want in CASES:
-        got = simulate(msg, replies, keys)
-        ok = (got == want)
+        m = match(msg)
+        got = m[0] if m else None
+        ok = got == want
         if not ok:
             bad.append((msg, got, want))
-        print(f"{'✓' if ok else '✗'} {msg:<16} 命中={got!r:<12} 期望={want!r}")
+        print(f"{'✓' if ok else '✗'} {msg:<18} → {got or '（沉默）':<10} 期望 {want or '（沉默）'}")
 
-    print(f"\n{len(CASES)-len(bad)}/{len(CASES)} 通过")
+    total = len(CASES)
+    print(f"\n{total - len(bad)}/{total} 通过")
     if bad:
+        print("失败项：")
         for b in bad:
-            print("  失败:", b)
+            print("  ", b)
         return 1
     return 0
 

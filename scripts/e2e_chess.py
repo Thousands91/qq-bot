@@ -1,4 +1,4 @@
-"""端到端：国际象棋插件（对棋 / 走 / 棋局 / 认输 / 悔棋 / 结束棋局）"""
+"""端到端：国际象棋插件（@开局 / 走 / 棋局 / 认输 / 悔棋 / 结束棋局）"""
 import asyncio
 import json
 import os
@@ -34,7 +34,6 @@ async def main():
         sys.executable, "main.py", cwd="bot", env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
-
     botlog = open("/tmp/chess_bot.log", "w")
 
     async def pump():
@@ -81,7 +80,12 @@ async def main():
                 await asyncio.sleep(2.5)
                 reply = got["segs"]
                 if not reply:
-                    print(f"✗ {name}: 沉默"); return 1
+                    # 沉默：只有在期望有回复时才算失败
+                    if expect_kw is False and not expect_img:
+                        print(f"✓ {name}: 沉默（符合预期）")
+                    else:
+                        print(f"✗ {name}: 沉默"); nonlocal bad; bad += 1
+                    return 0
                 text = "".join((s.get("data") or {}).get("text", "")
                                for msg in reply for s in msg if s.get("type") == "text")
                 imgs = sum(1 for msg in reply for s in msg if s.get("type") == "image")
@@ -90,6 +94,8 @@ async def main():
                     ok = False
                 if expect_kw and expect_kw not in text:
                     ok = False
+                if expect_kw is False and text.strip():
+                    ok = False   # 期望沉默
                 mark = "✓" if ok else "✗"
                 if not ok:
                     nonlocal bad; bad += 1
@@ -97,26 +103,35 @@ async def main():
                 return 0
 
             T = lambda t: [{"type": "text", "data": {"text": t}}]
+            ATB = lambda: [{"type": "at", "data": {"qq": str(BOT_UIN)}}]
 
-            await step("对棋(未@,等待黑方)", A, T("对棋"), False, "下一位说话的人执黑")
-            await step("走 e5(黑方认领)", B, T("走 e5"), False, "您执黑")
+            # 开局门槛：不 @ 机器人不开局
+            await step("裸「对棋」(@了对手但没@我)", A,
+                       T("对棋") + [{"type": "at", "data": {"qq": str(B)}}],
+                       False, False)
+            await step("@我 对棋(没@对手)", A, ATB() + T("对棋"), False, "@ 一位对手")
+            await step("@我 对棋 @B(正常开局)", A,
+                       ATB() + T("对棋") + [{"type": "at", "data": {"qq": str(B)}}],
+                       True, "执白先走")
+            await step("重复开局", A, ATB() + T("对棋"), False, "已经在下棋了")
             await step("走 e4(白方)", A, T("走 e4"), True, "黑方")
             await step("走 e5(黑方)", B, T("走 e5"), True, "白方")
+            await step("路人乱走(不该轮到他)", 999, T("走 Nf3"), False, "还没轮到你")
             await step("走 Nf3(白方)", A, T("走 Nf3"), True, "")
             await step("走 Nc6(黑方)", B, T("走 Nc6"), True, "")
             await step("棋局(看盘)", A, T("棋局"), True, "")
-            await step("走 e2e4(UCI,非法占位)", A, T("走 e2e4"), False, "走不通")
+            await step("走 e2e4(UCI非法)", A, T("走 e2e4"), False, "走不通")
             await step("走 Bb5", A, T("走 Bb5"), True, "")
             await step("悔棋(黑方)", B, T("悔棋"), True, "悔了一步")
             await step("重走 Bb5", A, T("走 Bb5"), True, "")
             await step("走 a6", B, T("走 a6"), True, "")
-            await step("结束棋局(路人)", 999, T("结束棋局"), False, "别人的")
-            await step("结束棋局(白方)", A, T("结束棋局"), False, "棋收了")
+            await step("结束棋局(路人)", 999, T("结束棋局"), False, "和你无关")
+            await step("结束棋局(白方)", A, T("结束棋局"), False, "棋局已结束")
 
-            # 快速将死流程
-            await step("对棋@(开局)", A,
-                       T("对棋") + [{"type": "at", "data": {"qq": str(B)}}],
-                       False, "执黑")
+            # 快速将死
+            await step("再开局(说「下棋」)", A,
+                       ATB() + T("下棋") + [{"type": "at", "data": {"qq": str(B)}}],
+                       True, "执白先走")
             await step("走 f3", A, T("走 f3"), True, "")
             await step("走 e5", B, T("走 e5"), True, "")
             await step("走 g4", A, T("走 g4"), True, "")

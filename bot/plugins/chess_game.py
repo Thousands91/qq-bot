@@ -13,7 +13,7 @@ from pathlib import Path
 
 import chess
 from nonebot import on_command, on_message
-from nonebot.adapters.onebot.v11 import Message, MessageEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, PrivateMessageEvent
 from nonebot.params import CommandArg
 from nonebot.rule import Rule
 from PIL import Image, ImageDraw, ImageFont
@@ -155,7 +155,8 @@ def _timeout_text(group_id: int) -> str | None:
 INTRO = (
     "先说走法：「走 e4」的意思是把 e 列第 4 格的兵走到 e4 那个格——"
     "列从左到右是 a 到 h，行从下到上是 1 到 8，白方在下面。\n"
-    "走马就是「走 Nf3」，王车易位是「走 O-O」。每走一步，我都把新棋盘画给您。\n"
+    "走马就是「走 Nf3」，王车易位是「走 O-O」，兵到底线升变是「走 e8=Q」。\n"
+    "每走一步，我都把新棋盘画给您。\n"
     "不想下了可以「认输」或「结束棋局」。落子无悔，想好再发。"
 )
 
@@ -175,6 +176,9 @@ start_cmd = on_message(rule=Rule(_is_start), priority=15, block=True)
 
 @start_cmd.handle()
 async def _(event: MessageEvent):
+    if isinstance(event, PrivateMessageEvent):
+        await start_cmd.finish("下棋得两个人，来群里 @我 说「国际象棋」吧。")
+
     group_id = gid_of(event)
     g = GAMES.get(group_id)
 
@@ -214,7 +218,7 @@ async def _(event: MessageEvent, arg: Message = CommandArg()):
     group_id = gid_of(event)
     g = GAMES.get(group_id)
     if not g:
-        await move_cmd.finish("柜上没有摆着的棋。想下的话，@我 说「国际象棋」。")
+        return  # 没棋局就沉默，免得日常说"走吧"也被搭理
     if g["black"] is None:
         await move_cmd.finish("还差一位执黑的，让他来 @我 报「国际象棋」。")
     t = _timeout_text(group_id)
@@ -264,7 +268,7 @@ async def _(event: MessageEvent):
     group_id = gid_of(event)
     g = GAMES.get(group_id)
     if not g or g["black"] is None:
-        await resign_cmd.finish("没有下到一半的棋，认什么输。")
+        return  # 没下到一半，不接话
     if event.user_id not in (g["white"], g["black"]):
         await resign_cmd.finish("这盘棋没您的份。")
     del GAMES[group_id]
@@ -278,7 +282,7 @@ async def _(event: MessageEvent):
     group_id = gid_of(event)
     g = GAMES.get(group_id)
     if not g:
-        await end_cmd.finish("本来就没有棋局。")
+        return  # 没棋局，沉默
     if g["black"] is None:
         if event.user_id != g["white"]:
             await end_cmd.finish("棋还没凑齐人，您急什么。")

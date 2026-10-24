@@ -37,15 +37,15 @@ PIECE_CHARS = {
 }
 CELL = 72
 MARGIN = 30
-LIGHT = (240, 217, 181)
-DARK = (181, 136, 99)
-HL = (246, 246, 105)
+LIGHT = (255, 255, 255)   # 白格
+DARK = (26, 26, 26)       # 黑格
+HL = (128, 128, 128)      # 最后一步高亮（灰）
 SIZE = MARGIN * 2 + CELL * 8
 
 
 def render_board(board: chess.Board) -> bytes:
     """渲染棋盘 PNG。视角：白方在下。"""
-    img = Image.new("RGB", (SIZE, SIZE), (60, 44, 32))
+    img = Image.new("RGB", (SIZE, SIZE), (100, 100, 100))  # 边框灰
     draw = ImageDraw.Draw(img)
 
     last = board.peek() if board.move_stack else None
@@ -74,13 +74,13 @@ def render_board(board: chess.Board) -> bytes:
 
     for i in range(8):
         draw.text((MARGIN + i * CELL + CELL / 2 - 5, 6), "abcdefgh"[i],
-                  font=FONT_SMALL, fill=(230, 220, 200))
+                  font=FONT_SMALL, fill=(230, 230, 230))
         draw.text((MARGIN + i * CELL + CELL / 2 - 5, SIZE - 22), "abcdefgh"[i],
-                  font=FONT_SMALL, fill=(230, 220, 200))
+                  font=FONT_SMALL, fill=(230, 230, 230))
         draw.text((4, MARGIN + i * CELL + CELL / 2 - 10), str(8 - i),
-                  font=FONT_SMALL, fill=(230, 220, 200))
+                  font=FONT_SMALL, fill=(230, 230, 230))
         draw.text((SIZE - 16, MARGIN + i * CELL + CELL / 2 - 10), str(8 - i),
-                  font=FONT_SMALL, fill=(230, 220, 200))
+                  font=FONT_SMALL, fill=(230, 230, 230))
 
     buf = io.BytesIO()
     img.save(buf, "PNG")

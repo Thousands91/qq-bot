@@ -46,11 +46,11 @@ async def _():
         await news_cmd.finish("今天的报纸是空白的，改天再问。")
         return
 
-    # 农历抬头，报头就有个日期感
+    # 公历抬头（源数据里 cMonth/cDay 是公历月日）
     cal = data.get("calendar") or {}
     head = ""
-    if cal.get("monthCn") and cal.get("dayCn"):
-        head = f"{cal.get('yearCn', '')}{cal['monthCn']}{cal['dayCn']}"
+    if cal.get("cMonth") and cal.get("cDay"):
+        head = f"{cal.get('cYear', '')}年{cal['cMonth']}月{cal['cDay']}日"
 
     lines = ["📰 每日要闻"]
     if head:

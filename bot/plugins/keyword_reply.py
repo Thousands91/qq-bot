@@ -9,7 +9,8 @@ import os
 import random
 import re
 
-from nonebot import on_message
+from nonebot import on_command, on_message
+from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
 
 ENABLE = os.getenv("ENABLE_KEYWORD_REPLY", "true").lower() == "true"
@@ -80,20 +81,6 @@ REPLIES = {
         "走棋发「走 e4」——把 e 列第 4 格的子走到 e4；马是「走 Nf3」，易位是「走 O-O」。每步我都画新盘给您。",
         "兵直走斜吃、马走日、象走斜线、车走直线、后最横竖斜都行、王一步一格。将死对方的王就赢。",
     ],
-    "菜单": [
-        # 这里的命令必须和实际插件对得上，写错了群友照着敲会没反应
-        "📖 店里这几样，您挑：\n"
-        "　找书 —— 帮您找书，古籍能直接下载\n"
-        "　点歌 —— 点一曲给您听\n"
-        "　抽签 —— 今日运势\n"
-        "　天气 —— 查个城市的天\n"
-        "　新闻 —— 今天的十件大事\n"
-        "　看图 —— 随手一张二次元\n"
-        "　看景 —— 随手一张真人摄影\n"
-        "　国际象棋 —— @我 说「国际象棋」开局；发「国际象棋教程」看完整玩法\n"
-        "　问我吃什么 / 喝什么 —— @我，我替您挑一样\n"
-        "　@我 + 任意话题 —— 跟我聊聊",
-    ],
     ("国际象棋教程", "象棋教程", "国际象棋玩法", "国际象棋怎么玩", "完整规则"): [
         # 完整版：规则 + 用法一次说完，发「国际象棋教程」就能看
         "📖 国际象棋，一次说全——\n\n"
@@ -122,6 +109,29 @@ REPLIES = {
     ],
 }
 # ============================================================
+
+MENU_TEXT = (
+    "@我 就能办这些事：\n"
+    "　找书 —— @我 找书 + 书名，古籍能直接下载\n"
+    "　点歌 —— @我 点歌 + 歌名\n"
+    "　抽签 —— @我 抽签\n"
+    "　天气 —— @我 天气 + 城市名\n"
+    "　新闻 —— @我 新闻\n"
+    "　看图 —— @我 看图，随手一张二次元\n"
+    "　看景 —— @我 看景，随手一张真人摄影\n"
+    "　国际象棋 —— @我 说「国际象棋」开局，两人各报一次；"
+    "开局后 @我 走 e4 落子；发「国际象棋教程」看完整玩法\n"
+    "　问我吃什么 / 喝什么 —— @我，我替您挑一样\n"
+    "　@我 + 任意话题 —— 跟我聊聊\n"
+    "（问候和闲聊不用 @，直接说就行）"
+)
+
+menu_cmd = on_command("菜单", rule=to_me(), priority=20, block=True)
+
+
+@menu_cmd.handle()
+async def _():
+    await menu_cmd.finish(MENU_TEXT)
 
 kw_reply = on_message(priority=80, block=False)
 

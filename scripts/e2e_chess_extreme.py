@@ -55,7 +55,9 @@ async def main():
                 for i, san in enumerate(moves):
                     got["segs"].clear()
                     uid = white if i % 2 == 0 else black
-                    await ws.send_json(group_msg(uid, [{"type":"text","data":{"text":f"走 {san}"}}]))
+                    await ws.send_json(group_msg(uid,
+                        [{"type":"at","data":{"qq":str(BOT_UIN)}},
+                         {"type":"text","data":{"text":f"走 {san}"}}]))
                     await asyncio.sleep(1.0)
                     if i < len(moves) - 1:
                         if not got["segs"]:
@@ -77,7 +79,7 @@ async def main():
             await play(["Nf3","Nf6","Ng1","Ng8","Nf3","Nf6","Ng1","Ng8"], "三次重复局面，平局")
             # 终局后应已清局：再走应沉默
             got["segs"].clear()
-            await ws.send_json(group_msg(A, T("走 e4")))
+            await ws.send_json(group_msg(A, ATB() + T("走 e4")))
             await asyncio.sleep(1.0)
             if got["segs"]:
                 print("✗ 重复和棋后未清局，还有回复"); bad += 1
@@ -93,7 +95,7 @@ async def main():
                         "Qxd7+","Kf7","Qxb7","Qd3","Qxb8","Qh7","Qxc8","Kg6","Qe6"],
                        "逼和，平局")
             got["segs"].clear()
-            await ws.send_json(group_msg(A, T("走 e4")))
+            await ws.send_json(group_msg(A, ATB() + T("走 e4")))
             await asyncio.sleep(1.0)
             if got["segs"]:
                 print("✗ 逼和后未清局"); bad += 1

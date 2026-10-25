@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Deque, Dict, List
 
 from nonebot import on_message
-from nonebot.rule import command
+from nonebot.rule import command, to_me
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, PrivateMessageEvent
 from nonebot.typing import T_State
 
@@ -356,7 +356,7 @@ async def call_llm(messages: List[dict]) -> str:
 
 
 # 清空对话记忆
-clear = on_message(command("清空记忆", "重置记忆"), priority=10, block=True)
+clear = on_message(command("清空记忆", "重置记忆") & to_me(), priority=10, block=True)
 
 
 @clear.handle()

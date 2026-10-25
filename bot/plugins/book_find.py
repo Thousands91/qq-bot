@@ -43,11 +43,13 @@ from typing import List
 
 import aiohttp
 from nonebot import on_command
+from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 
 find_cmd = on_command(
-    "找书", aliases={"淘书", "找本书", "有这本书吗"}, priority=20, block=True
+    "找书", aliases={"淘书", "找本书", "有这本书吗"},
+    rule=to_me(), priority=20, block=True
 )
 
 SEARCH = "https://book.douban.com/j/subject_suggest"

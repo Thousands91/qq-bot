@@ -11,6 +11,7 @@ import random
 
 import aiohttp
 from nonebot import on_command
+from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
     Message,
@@ -27,6 +28,7 @@ RANDOM_IMG_APIS = [
 image_search = on_command(
     "看图",
     aliases={"找图", "来点图", "色图", "来点色图", "整点涩图"},
+    rule=to_me(),
     priority=20,
     block=True,
 )
@@ -63,6 +65,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
 scenery = on_command(
     "看景",
     aliases={"风景", "来点风景", "看风景", "摄影"},
+    rule=to_me(),
     priority=20,
     block=True,
 )

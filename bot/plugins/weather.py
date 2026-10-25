@@ -11,6 +11,7 @@ from datetime import datetime
 
 import aiohttp
 from nonebot import on_command
+from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
 from nonebot.params import CommandArg
 
@@ -19,7 +20,7 @@ KEY = os.getenv("QWEATHER_KEY", "")
 # 旧的 devapi.qweather.com 已停用。不填就退到 Open-Meteo，不影响使用。
 HOST = os.getenv("QWEATHER_API_HOST", "").rstrip("/")
 
-weather = on_command("天气", priority=20, block=True)
+weather = on_command("天气", rule=to_me(), priority=20, block=True)
 
 GEO = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST = "https://api.open-meteo.com/v1/forecast"

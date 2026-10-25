@@ -21,11 +21,12 @@ from pathlib import Path
 
 import aiohttp
 from nonebot import on_command
+from nonebot.rule import to_me
 from nonebot.exception import FinishedException
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 
-song_cmd = on_command("点歌", aliases={"听歌", "来首歌"}, priority=20, block=True)
+song_cmd = on_command("点歌", aliases={"听歌", "来首歌"}, rule=to_me(), priority=20, block=True)
 
 SEARCH = "https://music.163.com/api/search/get"
 # 第三方取流：给了 id 就返回 mp3 二进制

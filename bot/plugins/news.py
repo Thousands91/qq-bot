@@ -10,11 +10,12 @@
 """
 import aiohttp
 from nonebot import on_command
+from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import Message
 
 news_cmd = on_command(
     "新闻", aliases={"早报", "60s", "每日新闻", "看新闻"},
-    priority=20, block=True,
+    rule=to_me(), priority=20, block=True,
 )
 
 API = "https://news.topurl.cn/api"

@@ -15,9 +15,10 @@ import random
 import datetime
 
 from nonebot import on_command
+from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
 
-fortune = on_command("抽签", aliases={"运势", "翻书", "折卡"}, priority=20, block=True)
+fortune = on_command("抽签", aliases={"运势", "翻书", "折卡"}, rule=to_me(), priority=20, block=True)
 
 # ============ 四类卡：决定运势"应在何处" ============
 CARD_TYPES = {

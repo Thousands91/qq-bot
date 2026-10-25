@@ -17,7 +17,7 @@ import chess
 from nonebot import on_command, on_message
 from nonebot.adapters.onebot.v11 import Message, MessageEvent, PrivateMessageEvent
 from nonebot.params import CommandArg
-from nonebot.rule import Rule
+from nonebot.rule import Rule, to_me
 from PIL import Image, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
@@ -214,9 +214,9 @@ async def _(event: MessageEvent):
 # 走子 / 悔棋 / 认输 / 结束
 # ---------------------------------------------------------------------------
 
-move_cmd = on_command("走", priority=20, block=True)
-resign_cmd = on_command("认输", priority=20, block=True)
-end_cmd = on_command("结束棋局", aliases={"不下了"}, priority=20, block=True)
+move_cmd = on_command("走", rule=to_me(), priority=20, block=True)
+resign_cmd = on_command("认输", rule=to_me(), priority=20, block=True)
+end_cmd = on_command("结束棋局", aliases={"不下了"}, rule=to_me(), priority=20, block=True)
 
 
 @move_cmd.handle()

@@ -161,12 +161,6 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
         lines.append(f"{i}. {b['title']}　{author}{year}")
         lines.append(f"　　{b['url']}")
 
-    # 试读：微信读书对绝大多数在版书开放前几章免费。这里只给"去读"的入口，
-    # 不假装我们能替人把整本弄下来——那件事做不成，说清楚比糊弄强。
-    lines.append("")
-    lines.append("想先翻两页的，微信读书多半能试读：")
-    lines.append(f"　https://weread.qq.com/web/search/books?keyword={urllib.parse.quote(kw)}")
-
     lines.append("")
     lines.append("要去别处看看，往这儿走：")
     for name, url in platforms(kw):

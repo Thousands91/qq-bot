@@ -38,6 +38,7 @@ import json
 import os
 import random
 import re
+import urllib.parse
 from pathlib import Path
 from typing import List
 
@@ -164,7 +165,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
     # 不假装我们能替人把整本弄下来——那件事做不成，说清楚比糊弄强。
     lines.append("")
     lines.append("想先翻两页的，微信读书多半能试读：")
-    lines.append(f"　https://weread.qq.com/web/search/books?keyword={kw}")
+    lines.append(f"　https://weread.qq.com/web/search/books?keyword={urllib.parse.quote(kw)}")
 
     lines.append("")
     lines.append("要去别处看看，往这儿走：")
@@ -178,16 +179,18 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
 # - 豆瓣 subject_search 是网页搜索，能直接出书；不用那个只返 JSON 的建议接口
 # - 微信读书 / QQ 阅读的搜索页是 JS 渲染，但地址有效，点开就出结果
 # - 京东、当当、孔夫子都走搜索页，不硬编码某个商品的 id（会变）
-# - 关键字**不做 percent-encode**：QQ 里 %E4%B8%89%E4%BD%93 这种一眼看不懂，
-#   而各站都认原样的中文（实测微信读书 329 处命中、QQ阅读 49 处）。
+# - 关键字必须 percent-encode：中文原样放进 URL 时，QQ 客户端
+#   经常识别不出整条链接（点不动/截断/报无法访问），群里反馈全打不开。
+#   编码后各站照常认（服务端对 %E4%B8%89%E4%BD%93 与"三体"同样返回 200）。
 def platforms(keyword: str) -> list:
+    q = urllib.parse.quote(keyword)
     return [
-        ("微信读书", f"https://weread.qq.com/web/search/books?keyword={keyword}"),
-        ("QQ阅读", f"https://book.qq.com/so/{keyword}"),
-        ("京东", f"https://search.jd.com/Search?keyword={keyword}&enc=utf-8"),
-        ("当当", f"https://search.dangdang.com/?key={keyword}"),
-        ("孔夫子旧书", f"https://search.kongfz.com/product/?keyword={keyword}"),
-        ("喜马拉雅", f"https://www.ximalaya.com/search/{keyword}"),
+        ("微信读书", f"https://weread.qq.com/web/search/books?keyword={q}"),
+        ("QQ阅读", f"https://book.qq.com/so/{q}"),
+        ("京东", f"https://search.jd.com/Search?keyword={q}&enc=utf-8"),
+        ("当当", f"https://search.dangdang.com/?key={q}"),
+        ("孔夫子旧书", f"https://search.kongfz.com/product/?keyword={q}"),
+        ("喜马拉雅", f"https://www.ximalaya.com/search/{q}"),
     ]
 
 

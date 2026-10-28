@@ -10,12 +10,14 @@ AI 智能问答 —— 阿萨尔人格（《苏丹的游戏》书店老板）
 - 月之暗面 https://platform.moonshot.cn
 """
 import os
+import random
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Deque, Dict, List
 
 from nonebot import on_message
+from nonebot.log import logger
 from nonebot.rule import command, to_me
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, PrivateMessageEvent
 from nonebot.typing import T_State
@@ -54,8 +56,12 @@ GROUP_HINT = (
     "- 日常闲聊就正常接话，问候就好好问候，别硬塞卡牌、折卡这些词。\n"
     "- 只有话题本身沾到这个世界（卡牌、王城、城中的人和事）时，才以当事人、"
     "旁观者的口吻聊，细节取自你的人设，像住在这里的人随口讲，不是介绍设定。\n"
-    "- 听来的事要标明是听来的：「这话是听来的，我没亲见，不写进册子。」\n"
+    "- 听来的事要标明是听来的：「这话是听来的，我没亲见，不写进册子。」"
+    "但别人随口一句感想、抱怨、玩笑不算「听来的事」。"
+    "**这句话是备用的一句话，一周说一次都嫌多，不许当开场白反复用。**\n"
     "- 有人问危险的事（折卡、弑君、逃亡），你不入局，也不出主意，可以转述别人怎么做。\n"
+    "- **绝对禁止现编名字**：不知道的歌名、书名、人名、地名，就直说没听过、书上没记。"
+    "编一个《某某》出来是最大的露馅——你立过誓只写亲眼见过的事。\n"
     "- 语气克制、带点自嘲的清醒，不热血不中二，不卖惨。"
     "\n\n"
     "## 国际象棋（这个群里有棋盘，常有人问，照实答）\n"
@@ -278,8 +284,62 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         return
 
     text = event.get_plaintext().strip()
-    if not text:
+    # 引用消息：OneBot 的 reply 段只带消息 id，不带内容，
+    # 要拿 get_msg 把被引用那条的原话取回来，喂给模型。
+    # 注意：被引用那条的 id 在 reply 段的 data["id"]；也有实现放在 data["message_id"]。
+    quoted = ""
+    quoted_raw = None
+    has_reply = False
+    for seg in event.message:
+        if seg.type != "reply":
+            continue
+        has_reply = True
+        mid = seg.data.get("id") or seg.data.get("message_id")
+        if mid:
+            try:
+                src = await bot.call_api("get_msg", message_id=mid)
+            except Exception as e:
+                src = None
+                logger.warning(f"get_msg 取引用失败：{type(e).__name__} {e}")
+            if src:
+                quoted_raw = src.get("message") or src.get("raw_message") or ""
+                if isinstance(quoted_raw, list):
+                    quoted = "".join(
+                        s.get("data", {}).get("text", "")
+                        for s in quoted_raw
+                        if isinstance(s, dict) and s.get("type") == "text"
+                    )
+                else:
+                    quoted = str(quoted_raw)
+                quoted = quoted.strip()
+        break
+    if quoted:
+        base = text or "（没另写字）"
+        text = f"（对方引用了一条消息：「{quoted[:200]}」，然后对我说：）{base}"
+    elif has_reply:
+        # 引用的是图片等非文字内容，取不到原文也要让模型知道有引用这回事
+        base = text or "（没另写字）"
+        text = f"（对方引用了一条消息，但那条不是文字，取不到内容）{base}，看我怎么说。"
+    if not event.get_plaintext().strip() and not has_reply:
         await ai_chat.finish(Message("我在。您有什么要说给我听？📖"))
+
+    # 命中问候语/固定回复关键词的，交给 keyword_reply 出声，这里闭嘴（防双回复）
+    try:
+        from .keyword_reply import _match
+        if _match(text):
+            return
+    except Exception:
+        pass
+
+    # 问歌名/曲名的：小模型会现编歌名（编造设定是人设铁律的大忌），
+    # 这类问题不走模型，固定诚实回复。
+    import re as _re
+    if _re.search(r"(什么歌|哪首|这首歌|这歌|点播|放歌|唱个|唱首)", text) and "点歌" not in text:
+        await ai_chat.finish(Message(random.choice([
+            "书上没记这首歌，不敢妄言。您哼两句，我听听是不是城里流传的调子。",
+            "这首我没听过——没听过的东西，我不敢记。您说说词，兴许我认得出处。",
+            "曲名我没见过。店里只有书页间的旧词，时兴的歌我这部老骨头跟不上。",
+        ])))
 
     # 斜杠命令交给专门插件处理
     if text.startswith(("/", "!", "！")):

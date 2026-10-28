@@ -177,10 +177,10 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
 #   经常识别不出整条链接（点不动/截断/报无法访问），群里反馈全打不开。
 #   编码后各站照常认（服务端对 %E4%B8%89%E4%BD%93 与"三体"同样返回 200）。
 def platforms(keyword: str) -> list:
-    # 只留手机浏览器里验证过真能出结果的。砍掉的三家都有实据：
-    # - 京东：搜索页要登录
-    # - 孔夫子：SPA 空壳，手机上打开只有"请输入搜索词"，关键字传不进去
-    # - 喜马拉雅：同样 SPA 空壳，手机上打开是首页
+    # 所有关键字都必须 percent-encode：中文原样放进 URL 时，QQ 内置浏览器
+    # 会把链接截断或识别失败，站点要么跳首页要么读不到搜索词——
+    # 群里反馈"京东打开是首页、孔夫子和喜马拉雅是空壳"都是这个原因，
+    # 编码后（%E6%98%8E...）各站照常认。
     # 当当的搜索接口只认 GBK 编码（UTF-8 会被它当乱码，永远"搜索无结果"，
     # 实测 GBK 编码后"明亮的夜晚"命中 67 条），其余平台都用 UTF-8。
     q = urllib.parse.quote(keyword)
@@ -188,7 +188,10 @@ def platforms(keyword: str) -> list:
     return [
         ("微信读书", f"https://weread.qq.com/web/search/books?keyword={q}"),
         ("QQ阅读", f"https://book.qq.com/so/{q}"),
+        ("京东", f"https://search.jd.com/Search?keyword={q}&enc=utf-8"),
         ("当当", f"https://search.dangdang.com/?key={q_gbk}"),
+        ("孔夫子旧书", f"https://search.kongfz.com/product/?keyword={q}"),
+        ("喜马拉雅", f"https://www.ximalaya.com/search/{q}"),
     ]
 
 

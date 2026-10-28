@@ -340,7 +340,10 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 问歌名/曲名的：小模型会现编歌名（编造设定是人设铁律的大忌），
     # 这类问题不走模型，固定诚实回复。
     import re as _re
-    if _re.search(r"(什么歌|哪首|这首歌|这歌|点播|放歌|唱个|唱首)", text) and "点歌" not in text:
+    # 引用里带着歌曲信息时不要拦，让模型看着引用内容答
+    if (not (has_reply and quoted)
+            and _re.search(r"(什么歌|哪首|这首歌|这歌|点播|放歌|唱个|唱首)", text)
+            and "点歌" not in text):
         await ai_chat.finish(Message(random.choice([
             "书上没记这首歌，不敢妄言。您哼两句，我听听是不是城里流传的调子。",
             "这首我没听过——没听过的东西，我不敢记。您说说词，兴许我认得出处。",

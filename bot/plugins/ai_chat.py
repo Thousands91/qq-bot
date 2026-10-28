@@ -29,6 +29,8 @@ try:
 except ImportError:
     AZAR_PERSONA = "你扮演《苏丹的游戏》书店老板阿萨尔，博学、矜持、说话文雅简短。"
 
+_RE_REPLY = __import__("re").compile(r"\[CQ:reply,id=(\d+)\]")
+
 ENABLE = os.getenv("ENABLE_AI_CHAT", "true").lower() == "true"
 API_KEY = os.getenv("OPENAI_API_KEY", "")
 BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -283,36 +285,40 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
             )
         return
 
+    logger.info(f"[调试] tome={event.to_me} message={event.message!s} raw={event.raw_message!r}")
     text = event.get_plaintext().strip()
     # 引用消息：OneBot 的 reply 段只带消息 id，不带内容，
     # 要拿 get_msg 把被引用那条的原话取回来，喂给模型。
-    # 注意：被引用那条的 id 在 reply 段的 data["id"]；也有实现放在 data["message_id"]。
+    # 实测手机版 NapCat 会把 reply 段从 message 数组里剥掉，
+    # 但 raw_message 的 CQ 码里留着，所以两条路都试。
     quoted = ""
-    quoted_raw = None
-    has_reply = False
+    mid = None
     for seg in event.message:
-        if seg.type != "reply":
-            continue
-        has_reply = True
-        mid = seg.data.get("id") or seg.data.get("message_id")
-        if mid:
-            try:
-                src = await bot.call_api("get_msg", message_id=mid)
-            except Exception as e:
-                src = None
-                logger.warning(f"get_msg 取引用失败：{type(e).__name__} {e}")
-            if src:
-                quoted_raw = src.get("message") or src.get("raw_message") or ""
-                if isinstance(quoted_raw, list):
-                    quoted = "".join(
-                        s.get("data", {}).get("text", "")
-                        for s in quoted_raw
-                        if isinstance(s, dict) and s.get("type") == "text"
-                    )
-                else:
-                    quoted = str(quoted_raw)
-                quoted = quoted.strip()
-        break
+        if seg.type == "reply":
+            mid = seg.data.get("id") or seg.data.get("message_id")
+            break
+    if not mid:
+        m_cq = _RE_REPLY.search(event.raw_message or "")
+        if m_cq:
+            mid = m_cq.group(1)
+    if mid:
+        try:
+            src = await bot.call_api("get_msg", message_id=mid)
+        except Exception as e:
+            src = None
+            logger.warning(f"get_msg 取引用失败：{type(e).__name__} {e}")
+        if src:
+            quoted_raw = src.get("message") or src.get("raw_message") or ""
+            if isinstance(quoted_raw, list):
+                quoted = "".join(
+                    s.get("data", {}).get("text", "")
+                    for s in quoted_raw
+                    if isinstance(s, dict) and s.get("type") == "text"
+                )
+            else:
+                quoted = str(quoted_raw)
+            quoted = quoted.strip()
+    has_reply = mid is not None
     if quoted:
         base = text or "（没另写字）"
         text = f"（对方引用了一条消息：「{quoted[:200]}」，然后对我说：）{base}"

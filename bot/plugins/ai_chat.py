@@ -42,6 +42,61 @@ TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.85"))
 # 对话上下文（按 (群号, 用户QQ) 缓存）
 HISTORY: Dict[tuple, Deque[dict]] = defaultdict(lambda: deque(maxlen=CONTEXT_LEN))
 
+# ============ 长期记忆：每人最多 100 条，随手记，回复时带上最近的一部分 ============
+import json as _json
+import time as _time
+import re as _re_mod
+
+MEMORY_DIR = Path(__file__).parent.parent / "data" / "memory"
+MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+MEMORY_CAP = 100          # 每人最多存多少条
+MEMORY_IN_PROMPT = 30     # 每次回复时带给模型最近多少条
+# 这些开头的消息不值得记（命令、寒暄、太短的）
+_MEMORY_SKIP = _re_mod.compile(
+    r"^(国际象棋|走 |认输|结束棋局|清空记忆|重置记忆|忘了我|菜单|天气|点歌|抽签|找书|新闻|看图|看景|/|!|！)"
+)
+_MEMORY_MIN_LEN = 4
+
+
+def _memory_path(uid: int) -> Path:
+    return MEMORY_DIR / f"{uid}.json"
+
+
+def _load_memory(uid: int) -> list:
+    try:
+        return _json.loads(_memory_path(uid).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_memory(uid: int, entries: list) -> None:
+    try:
+        _memory_path(uid).write_text(
+            _json.dumps(entries[-MEMORY_CAP:], ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception as e:
+        logger.warning(f"长期记忆写入失败：{type(e).__name__} {e}")
+
+
+def _remember(uid: int, text: str) -> None:
+    """随手记一条：太短、像命令/寒暄的、和上一条重复的都不记。"""
+    text = text.strip()
+    if len(text) < _MEMORY_MIN_LEN or _MEMORY_SKIP.search(text):
+        return
+    entries = _load_memory(uid)
+    if entries and entries[-1].get("m") == text:
+        return
+    entries.append({"t": int(_time.time()), "m": text[:120]})
+    _save_memory(uid, entries[-MEMORY_CAP:])
+
+
+def _memory_block(uid: int) -> str:
+    entries = _load_memory(uid)
+    if not entries:
+        return ""
+    recent = [e.get("m", "") for e in entries[-MEMORY_IN_PROMPT:]]
+    return "（这是你以前和对方打交道时记下的话，聊天时可以自然地用上，证明你记得他；别整段复述。）\n" + "\n".join(f"- {m}" for m in recent)
+
 # 群聊场合的补充约束
 GROUP_HINT = (
     "\n\n## 当前场合（务必遵守）\n"
@@ -361,6 +416,9 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 问吃/喝的：先抽好一样，塞进这一轮的提示里，免得模型报菜单。
     # 注意 hint 只发给模型，不进 HISTORY——否则后面每轮都带着"（提醒：…）"，
     # 模型会一直以为对方还在点菜。
+    mem_block = _memory_block(event.user_id)
+    if mem_block:
+        text = f"{text}\n\n{mem_block}"
     picked = pick_food_or_drink(text, key)
     if picked:
         hint = f"{text}\n\n（提醒：对方是让你挑一样。这一样就定作「{picked}」，直接说它，别报菜单。）"
@@ -383,6 +441,9 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
 
     msgs.append({"role": "user", "content": text})
     msgs.append({"role": "assistant", "content": answer})
+
+    # 长期记忆：只记用户自己的话，不记带记忆块/挑食提醒的拼装版
+    _remember(event.user_id, event.get_plaintext().strip())
 
     await ai_chat.finish(Message(answer))
 
@@ -431,5 +492,9 @@ clear = on_message(command("清空记忆", "重置记忆") & to_me(), priority=1
 @clear.handle()
 async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
     HISTORY.pop((getattr(event, "group_id", 0), event.user_id), None)
+    try:
+        _memory_path(event.user_id).unlink(missing_ok=True)
+    except Exception:
+        pass
     await clear.finish("记忆已清空，重新谈吧。")
 

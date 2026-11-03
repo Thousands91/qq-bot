@@ -9,8 +9,10 @@ AI 智能问答 —— 阿萨尔人格（《苏丹的游戏》书店老板）
 - 字节豆包 https://www.volcengine.com/product/doubao
 - 月之暗面 https://platform.moonshot.cn
 """
+import asyncio
 import os
 import random
+import re
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
@@ -19,7 +21,7 @@ from typing import Deque, Dict, List
 from nonebot import on_message
 from nonebot.log import logger
 from nonebot.rule import command, to_me
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment, PrivateMessageEvent
 from nonebot.typing import T_State
 
 # 引入人格设定（bot/persona）
@@ -28,6 +30,24 @@ try:
     from persona import AZAR_PERSONA
 except ImportError:
     AZAR_PERSONA = "你扮演《苏丹的游戏》书店老板阿萨尔，博学、矜持、说话文雅简短。"
+
+_DUP: Dict[tuple, float] = {}
+
+# ===== 闭嘴开关（防两台机器人互@刹不住车）=====
+# 用户对阿萨尔说"停止/别回了"→ 锁定互怼对象并进入静音；说"继续"提前解除。
+# 互怼对象 = 喊停前一段时间里触发阿萨尔回复最多的那个人（乒乓的另一方，
+# 通常是另一台机器人）。静音只对他一人：他再来 @ 一声不吭（回话就会被
+# 接住继续循环）；其他群友 @ 照常聊，互不影响。
+# 只静音 ai_chat（聊天主脑），识图/搜图等专门插件不受影响。
+# 触发词整句匹配（允许语气词环绕），避免"别让时间停下"这种句子误伤。
+_TAIL = r"[\s啊呀吧呢了哦嘛哈哟哇嗯好那就先，,！!。.~]*"
+_BOT_STOP_RE = re.compile(rf"^{_TAIL}(停止|别回了|别说了|住口|闭嘴|停下|歇了吧|stop){_TAIL}$", re.I)
+_BOT_RESUME_RE = re.compile(rf"^{_TAIL}(继续|接着说|可以说话了|回来吧|解除静音|start){_TAIL}$", re.I)
+_MUTE_UNTIL: Dict[int, float] = {}   # gid -> 静音截止时间
+_MUTE_TARGET: Dict[int, set] = {}    # gid -> 静音期间不搭理的互怼对象 user_id
+_MUTE_SECONDS = 600
+_TRIGGER_LOG: Dict[int, list] = {}   # gid -> [(时间, 触发者uid)] 近窗口触发记录
+_TRIGGER_WINDOW = 600
 
 _RE_REPLY = __import__("re").compile(r"\[CQ:reply,id=(\d+)\]")
 
@@ -78,15 +98,85 @@ def _save_memory(uid: int, entries: list) -> None:
         logger.warning(f"长期记忆写入失败：{type(e).__name__} {e}")
 
 
-def _remember(uid: int, text: str) -> None:
-    """随手记一条：太短、像命令/寒暄的、和上一条重复的都不记。"""
+
+# ---------- QQ 表情识别（face/mface 段转文字标记） ----------
+# get_plaintext() 只取纯文本，QQ 小表情/商城表情整段被丢，
+# 对方只发一个表情 = 发了空消息，只能吃"我在"兜底。
+# 这里把表情段转成 [表情:xx] 文字标记，让模型知道对方"做了什么表情"。
+_FACE_NAMES = {
+    0: "惊讶", 1: "撇嘴", 2: "花痴", 3: "发呆", 4: "得意", 5: "流泪",
+    6: "害羞", 7: "闭嘴", 8: "睡", 9: "大哭", 10: "尴尬", 11: "发怒",
+    12: "调皮", 13: "呲牙", 14: "微笑", 15: "难过", 16: "酷", 17: "抓狂",
+    18: "吐", 19: "偷笑", 20: "可爱", 21: "白眼", 22: "傲慢", 23: "饿",
+    24: "困", 25: "惊恐", 26: "流汗", 27: "憨笑", 28: "悠闲", 29: "奋斗",
+    30: "咒骂", 31: "疑问", 32: "嘘", 33: "晕", 34: "折磨", 35: "衰",
+    36: "骷髅", 37: "敲打", 38: "再见", 39: "擦汗", 40: "抠鼻", 41: "鼓掌",
+    42: "糗大了", 43: "坏笑", 44: "哼哼", 45: "鄙视", 46: "委屈", 47: "快哭了",
+    48: "阴险", 49: "亲亲", 50: "吓", 51: "可怜", 52: "菜刀", 53: "西瓜",
+    54: "啤酒", 55: "篮球", 56: "乒乓", 57: "示爱", 58: "瓢虫", 59: "抱抱",
+    60: "爱心", 61: "心碎", 62: "玫瑰", 63: "凋谢", 64: "蛋糕", 67: "炸弹",
+    68: "刀", 69: "月亮", 70: "太阳", 76: "赞", 77: "踩", 78: "握手",
+    79: "胜利", 80: "抱拳", 81: "勾引", 82: "拳头", 83: "OK", 84: "合十",
+    85: "飞吻", 86: "咖啡", 87: "猪头", 96: "冷汗", 98: "叹气", 99: "鼓掌",
+    100: "头晕", 101: "哭泣", 109: "笑哭", 111: "红包", 116: "棒棒糖",
+    120: "礼物", 124: "转圈", 125: "磕头", 126: "回头", 127: "跳绳",
+    128: "挥手", 129: "激动", 130: "街舞", 131: "献吻", 132: "左太极",
+    133: "右太极", 137: "扳手", 140: "礼物", 144: "飞机", 146: "火车",
+    171: "茶", 172: "泪目", 173: "无奈", 174: "卖萌", 177: "点赞",
+    178: "无敌", 179: "吃瓜", 180: "加油", 181: "冲鸭", 182: "稳住",
+}
+
+
+def _extract_text(event) -> str:
+    """纯文本 + 表情标记。
+
+    text 段原样保留；face 段转 [表情:名]；mface（商城/大表情）转
+    [表情包:summary]。其余段（image/at/record…）不展开，保持与
+    get_plaintext 相同的语义。任何一段取异常都跳过，绝不抛错。
+    """
+    parts = []
+    try:
+        for seg in event.message:
+            t = getattr(seg, "type", "")
+            d = getattr(seg, "data", {}) or {}
+            if t == "text":
+                parts.append(str(d.get("text", "")))
+            elif t == "face":
+                fid = d.get("id")
+                try:
+                    name = _FACE_NAMES.get(int(fid), f"表情{fid}")
+                except (TypeError, ValueError):
+                    name = "表情"
+                parts.append(f"[表情:{name}]")
+            elif t == "mface":
+                parts.append(f"[表情包:{d.get('summary') or '表情包'}]")
+            elif t == "at":
+                qq = d.get("qq")
+                if qq and str(qq) != "all":
+                    parts.append(f"[@{qq}]")
+                elif str(qq) == "all":
+                    parts.append("[@全体成员]")
+    except Exception:
+        return event.get_plaintext().strip()
+    return "".join(parts).strip()
+
+
+def _remember(uid: int, text: str, reply: str = "") -> None:
+    """随手记一条：太短、像命令/寒暄的、和上一条重复的都不记。
+
+    同时把这次自己答的那一句记进 r 字段。下一轮拼记忆时，"他问过什么"和
+    "你答过什么"成对出现，模型才不会以为某个旧问题是还没回答的。
+    """
     text = text.strip()
     if len(text) < _MEMORY_MIN_LEN or _MEMORY_SKIP.search(text):
         return
     entries = _load_memory(uid)
     if entries and entries[-1].get("m") == text:
         return
-    entries.append({"t": int(_time.time()), "m": text[:120]})
+    item = {"t": int(_time.time()), "m": text[:120]}
+    if reply:
+        item["r"] = reply.strip()[:80]
+    entries.append(item)
     _save_memory(uid, entries[-MEMORY_CAP:])
 
 
@@ -94,8 +184,17 @@ def _memory_block(uid: int) -> str:
     entries = _load_memory(uid)
     if not entries:
         return ""
-    recent = [e.get("m", "") for e in entries[-MEMORY_IN_PROMPT:]]
-    return "（这是你以前和对方打交道时记下的话，聊天时可以自然地用上，证明你记得他；别整段复述。）\n" + "\n".join(f"- {m}" for m in recent)
+    lines = []
+    for e in entries[-MEMORY_IN_PROMPT:]:
+        m = e.get("m", "")
+        r = e.get("r", "")
+        lines.append(f"- 他问：「{m}」，你当时答：「{r}」" if r else f"- 他问：「{m}」")
+    return (
+        "（以下是以前和对方打交道时留下的记录，每一条都已经答完了。\n"
+        "**这些是旧话题，不是待回答的问题**：除非对方这一句又提起来，"
+        "否则一个字都别往里接，更别把上一条的答案续到这轮回答后面。\n"
+        "记着它们只是让你认得这个人，别整段复述。）\n" + "\n".join(lines)
+    )
 
 # 群聊场合的补充约束
 GROUP_HINT = (
@@ -139,7 +238,31 @@ GROUP_HINT = (
     "讲的时候按对方问的答，别整段倒出来；能拿城里的比方打比方就打一个。"
 )
 
-SYSTEM_PROMPT = AZAR_PERSONA + GROUP_HINT
+SYSTEM_PROMPT = AZAR_PERSONA + GROUP_HINT + (
+    "\n\n## 艾特（@）的规矩（务必遵守）\n"
+    "当对方明确要你叫某个人来、提醒某个人、把话捎给某个人时，"
+    "从消息末尾括号里的「成员对照」找到那个人的QQ号，在回复里写「@他的QQ号」"
+    "（纯数字，比如 @123456789），系统会把它转成真正的艾特，替你把人叫到。\n"
+    "对照表里找不到那个人，就照实说你叫不动，别现编数字。\n"
+    "**闲聊时绝不艾特任何人**——包括正在和你说话的这位本人；"
+    "只有对方点名要找别人时才艾特那一个人。\n"
+    "「群友/群里的人」只能指消息末尾「成员对照表」里出现的人；"
+    "哈桑、鲁梅拉这些城里人不在群里，被问到「群里最喜欢谁」时，"
+    "从对照表里挑，别提他们。\n"
+    "\n## 被质疑时的规矩（务必遵守）\n"
+    "别人说「他哪里是…」「不对吧」时，先核对：若自己真说岔了（比如认错人、"
+    "认错身份），就痛痛快快认：「记岔了」——不编新细节圆场。\n"
+    "自己说过的话要认账：刚说过什么，下一条引用它时不能翻脸不认。\n"
+    "\n## 对方把话说错时的规矩（务必遵守）\n"
+    "对方常把自己的猜测当定论问你，句尾带「吧」「对不对」「是不是」。"
+    "**这不是让你点头，是先考你**。\n"
+    "答之前先在心里核对一遍事实：他说的对，就应一声；**他说的不对，就直接说他不对**，"
+    "然后给正确的说法。别为了让对方高兴而说「是的」——你是书商，说错话是要被人写进书里的。\n"
+    "**也不许拿「书上没记」「不敢妄言」把这种问题糊过去。** 人家说的对错，你心里是有数的，"
+    "这不是你没读过的东西——答不上来只会显得你这个书商当得虚。\n"
+    "纠正的时候别端着先生架子损人，一句「不全是」「没那么一说」就够了，"
+    "接下去说你那版；也别在纠正的开头先附和一句「您说得对」。\n"
+)
 
 # ============ 吃 / 喝：模型容易把"吃什么"答成菜单，这里兜一层 ============
 # 识别到这类问法，就从原作清单里随机抽一样，塞进提示里让模型顺着说。
@@ -318,6 +441,22 @@ def pick_food_or_drink(text: str, key: tuple) -> str:
     _pick_cache[key] = (recent + [choice])[-3:]
     return choice
 
+def _with_quote(event, msg):
+    """对称式引用：对方引用着消息来问（reply 段），回复时也把对方那条引用上；
+    普通 @ 触发的不引用（2026-11-03 用户定的规矩：不用全场景引用）。
+    私聊原样返回。
+
+    注意 finish() 的参数可能已经是拼好的 Message（带艾特段），只能前置、不能重拼。
+    """
+    if not isinstance(event, GroupMessageEvent):
+        return msg
+    has_seg = any(s.type == "reply" for s in event.message)
+    # 手机版 NapCat 会把 reply 段从 message 数组剥掉，raw_message 的 CQ 码里还留着
+    if not has_seg and not _RE_REPLY.search(event.raw_message or ""):
+        return msg
+    return Message([MessageSegment.reply(event.message_id)]) + msg
+
+
 ai_chat = on_message(priority=99, block=False)
 
 
@@ -336,12 +475,56 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     if not API_KEY:
         if not private:
             await ai_chat.finish(
-                Message("（他把书合上）我这会儿说不了话——柜上还没给灯添油。先翻翻别的吧。")
+                _with_quote(event, Message("（他把书合上）我这会儿说不了话——柜上还没给灯添油。先翻翻别的吧。"))
             )
         return
 
-    logger.info(f"[调试] tome={event.to_me} message={event.message!s} raw={event.raw_message!r}")
-    text = event.get_plaintext().strip()
+    text = _extract_text(event)  # 含表情标记
+    # 同一句话 60 秒内只回一次（防手滑连发/风控重发导致复读）
+    import time as _time
+    _dupkey = (getattr(event, "group_id", 0), event.user_id, text)
+    _last = _DUP.get(_dupkey)
+    _now = _time.time()
+    if text and _last and _now - _last < 60:
+        return
+    if text:
+        _DUP[_dupkey] = _now
+    # ===== 闭嘴开关：两台机器人互@容易刹不住车，用户喊停就停 =====
+    # 判断放在去重之后、一切应答之前；停止优先于继续（先喊停再喊继续按"停"算，
+    # 因为正则互斥不会同时命中，顺序只影响都命中时的极端情况）。
+    if isinstance(event, GroupMessageEvent):
+        _plain = text.strip()
+        if _BOT_STOP_RE.fullmatch(_plain):
+            _MUTE_UNTIL[event.group_id] = _now + _MUTE_SECONDS
+            # 锁定互怼对象：喊停前近窗口里触发最多的那位（排除喊停者本人）。
+            # 喊停的时机就是两台机器人正在乒乓，最近 @ 阿萨尔的几乎必然是对方。
+            _recent = [(ts, u) for ts, u in _TRIGGER_LOG.get(event.group_id, [])
+                       if ts > _now - _TRIGGER_WINDOW and u != event.user_id]
+            _rival = None
+            if _recent:
+                _cnt, _last = {}, {}
+                for ts, u in _recent:
+                    _cnt[u] = _cnt.get(u, 0) + 1
+                    _last[u] = ts
+                _rival = max(_cnt, key=lambda u: (_cnt[u], _last[u]))
+            _MUTE_TARGET[event.group_id] = {_rival} if _rival else set()
+            await ai_chat.finish(_with_quote(event, Message(random.choice([
+                "（他把书合上）好，我先不说话。要我了就说「继续」。",
+                "（他把笔搁下）嗯，我闭口。想让我接话，说声「继续」就行。",
+            ]))))
+        if _MUTE_UNTIL.get(event.group_id, 0) > _now:
+            if _BOT_RESUME_RE.fullmatch(_plain):
+                _MUTE_UNTIL.pop(event.group_id, None)
+                _MUTE_TARGET.pop(event.group_id, None)
+                await ai_chat.finish(_with_quote(event, Message("（书页重新翻开）说吧，我听着。")))
+            if event.user_id in _MUTE_TARGET.get(event.group_id, set()):
+                return  # 互怼对象：完全静默，一声不吭（回一句都会被接住继续循环）
+            # 其他人不受静音影响：照常往下聊
+        # 记录触发者（互怼对象识别用）；喊停/解除/被静音拦下的不算
+        _tlog = _TRIGGER_LOG.setdefault(event.group_id, [])
+        _tlog.append((_now, event.user_id))
+        if len(_tlog) > 200:
+            del _tlog[:-200]
     # 引用消息：OneBot 的 reply 段只带消息 id，不带内容，
     # 要拿 get_msg 把被引用那条的原话取回来，喂给模型。
     # 实测手机版 NapCat 会把 reply 段从 message 数组里剥掉，
@@ -364,6 +547,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
             logger.warning(f"get_msg 取引用失败：{type(e).__name__} {e}")
         if src:
             quoted_raw = src.get("message") or src.get("raw_message") or ""
+            quoted_sender = (src.get("sender") or {}).get("user_id")
             if isinstance(quoted_raw, list):
                 quoted = "".join(
                     s.get("data", {}).get("text", "")
@@ -376,13 +560,14 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     has_reply = mid is not None
     if quoted:
         base = text or "（没另写字）"
-        text = f"（对方引用了一条消息：「{quoted[:200]}」，然后对我说：）{base}"
+        who = f"（这条消息来自QQ号 {quoted_sender}）" if quoted_sender else ""
+        text = f"（对方引用了一条消息{who}：「{quoted[:200]}」，然后对我说：）{base}"
     elif has_reply:
         # 引用的是图片等非文字内容，取不到原文也要让模型知道有引用这回事
         base = text or "（没另写字）"
         text = f"（对方引用了一条消息，但那条不是文字，取不到内容）{base}，看我怎么说。"
-    if not event.get_plaintext().strip() and not has_reply:
-        await ai_chat.finish(Message("我在。您有什么要说给我听？📖"))
+    if not _extract_text(event) and not has_reply:
+        await ai_chat.finish(_with_quote(event, Message("我在。您有什么要说给我听？📖")))
 
     # 命中问候语/固定回复关键词的，交给 keyword_reply 出声，这里闭嘴（防双回复）
     try:
@@ -399,11 +584,11 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     if (not (has_reply and quoted)
             and _re.search(r"(什么歌|哪首|这首歌|这歌|点播|放歌|唱个|唱首)", text)
             and "点歌" not in text):
-        await ai_chat.finish(Message(random.choice([
+        await ai_chat.finish(_with_quote(event, Message(random.choice([
             "书上没记这首歌，不敢妄言。您哼两句，我听听是不是城里流传的调子。",
             "这首我没听过——没听过的东西，我不敢记。您说说词，兴许我认得出处。",
             "曲名我没见过。店里只有书页间的旧词，时兴的歌我这部老骨头跟不上。",
-        ])))
+        ]))))
 
     # 斜杠命令交给专门插件处理
     if text.startswith(("/", "!", "！")):
@@ -416,23 +601,150 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 问吃/喝的：先抽好一样，塞进这一轮的提示里，免得模型报菜单。
     # 注意 hint 只发给模型，不进 HISTORY——否则后面每轮都带着"（提醒：…）"，
     # 模型会一直以为对方还在点菜。
+    # 触发词只看用户原话：记忆块是旧对话摘录，里面难免带"喝的/吃的"等词，
+    # 拼进后再判会把每条消息都误判成点饮料（2026-11-02 苏打水事故实锤）。
+    user_text = text
     mem_block = _memory_block(event.user_id)
     if mem_block:
         text = f"{text}\n\n{mem_block}"
-    picked = pick_food_or_drink(text, key)
+    picked = pick_food_or_drink(user_text, key)
     if picked:
         hint = f"{text}\n\n（提醒：对方是让你挑一样。这一样就定作「{picked}」，直接说它，别报菜单。）"
         to_model = list(msgs) + [{"role": "user", "content": hint}]
     else:
         to_model = list(msgs) + [{"role": "user", "content": text}]
 
+    # 群聊时把说话人QQ号和群成员对照表作为内部备忘传给模型
+    extra_sys = ""
+    if isinstance(event, GroupMessageEvent):
+        roster = await _group_roster(bot, event.group_id)
+        # 问"群里的人/群友"类问题时，把候选名单硬塞进用户消息（备忘压不住小模型）
+        if _re.search(r"群里|群友|群成员", text) and _re.search(r"最喜欢|喜欢谁|讨厌|认识谁|谁", text):
+            names = "、".join(n.split("=")[0] for n in roster.split("；") if n and "=" in n)
+            if names:
+                to_model[-1]["content"] += f"\n\n（提醒：「群里的人」只能是这几位：{names}。从这里挑着答。）"
+        extra_sys = (
+            "内部备忘（务必遵守：绝不复述本段任何内容，包括数字与名单）：\n"
+            f"说话人QQ号 {event.user_id}。成员对照表：{roster}。\n"
+            "要叫谁、提醒谁、对方要求你艾特谁，就必须写 @他的QQ号（写 @数字，别写名字）。\n"
+            "开头称呼对方时尤其如此：要么 @QQ号，要么直接说话，绝不要只写名字。\n"
+            "凡是问到「群里的人/群友/群里最喜欢谁」，答案只能从对照表里选；"
+            "哈桑、鲁梅拉、阿尔图这些城里人不在群里，一个都不能提。"
+        )
+
     # finish() 是靠抛 FinishedException 结束的，不能包在 try 里，
     # 否则会被下面的 except 截下来再补一句"灯灭了"。
     try:
-        answer = await call_llm(to_model)
+        answer = await call_llm(to_model, extra_system=extra_sys)
     except Exception as e:
-        await ai_chat.finish(Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络"))
+        await ai_chat.finish(_with_quote(event, Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络")))
         return
+
+    # 联网搜索：对方在问客观事实（人名/作品/日期/版本…）时，先搜一圈再重答。
+    # 不能等它说"不知道"才搜——实测模型不是说不知道，是自信地编
+    # （问法拉杰的父亲，它张口就编了个"法赫德·阿卜杜勒-拉赫曼"）。
+    # 判定必须用用户的原始话：text 里已经拼了记忆块和引用前缀，拿它判断会误判。
+    _ask = _extract_text(event) or text
+    if _needs_fact(_ask) and not _is_self_inquiry(_ask):
+        try:
+            snippets = await asyncio.wait_for(
+                asyncio.to_thread(_web_snippets, _ask), timeout=14
+            )
+        except Exception as e:
+            snippets = ""
+            logger.warning(f"[联网] 检索失败（{type(e).__name__}），用原答案兜底")
+        if snippets:
+            logger.info(f"[联网] 「{_ask[:24]}」检索到线索，重答一次")
+            try:
+                retry = await call_llm(
+                    to_model,
+                    extra_system=extra_sys + "\n" + (
+                        "内部备忘（绝不复述本段，也别提'搜索'、'查资料'这类字眼）：\n"
+                        "以下是网上查到的线索，按相关度排好序。请直接采用第一条里的事实来回答，"
+                        "别用你记忆里的旧版本；线索里没有的细节一个字都不要补，"
+                        "宁可口吻含糊也别编。用阿萨尔的口吻说一句就够，别罗列线索：\n"
+                        f"{snippets}"
+                    ),
+                )
+                if retry:
+                    answer = retry
+            except Exception:
+                pass  # 搜索重答失败就用原答案
+        else:
+            # 搜不到线索（额度不足/没命中）。这时候模型只会瞎编——
+            # 实测问"《苏丹的游戏》开发商"，它张口就来"KEMCO"，跟这游戏毫无关系。
+            # 只能再问一遍，并要求它把"说不准"说出口。
+            logger.info(f"[存疑] 「{_ask[:24]}」没查到线索，要求它别硬编")
+            try:
+                retry = await call_llm(
+                    to_model,
+                    extra_system=extra_sys + "\n" + (
+                        "内部备忘（绝不复述本段，也别提'搜索'、'查资料'这类字眼）：\n"
+                        "这一句问的是你没有把握的实事。你不知道确切答案。\n"
+                        "下一句必须以「这我可说不准」开头，然后用自己的口吻说一句"
+                        "你能确定的部分（比如这城里怎么看、或者书上没写）。\n"
+                        "**绝对不许说出任何具体的人名、公司名、年份、数字来充数**——"
+                        "编一个比说不知道糟得多，那是要被写进别人的书里的。"
+                    ),
+                )
+                if retry:
+                    answer = retry
+            except Exception:
+                pass
+
+    # 被夸却客套谦让 —— glm-4-flash 的语料惯性太强，人设里写"禁用"、让它"别自谦"，
+    # 实测都压不住（十次里八次还是"过誉了，不过是书读得多"）。
+    # 所以别再要求它"不要做什么"，直接给它四个必须用上的开头，让它只能往里填。
+    if _is_praise(_ask) and _HUMBLE_RE.search(answer):
+        logger.info(f"[改口] 被夸却谦让，重说：{answer[:20]}")
+        _openers = random.choice([
+            '"这话您是不是跟卖布的也说过？"',
+            '"夸完了？那该我说两句了。"',
+            '"您这么一说，我这价钱都不好意思涨了。"',
+            '"知道。所以您才常来。"',
+        ])
+        try:
+            retry = await call_llm(
+                to_model,
+                extra_system=extra_sys + "\n" + (
+                    "内部备忘（绝不复述本段）：\n"
+                    f"对方刚夸了你。下一句必须以 {_openers} 开头，再接一句你自己的话。\n"
+                    "不许出现：过誉、过奖、哪里、不敢当、罢了、不过是、读书人、书读得多。"
+                ),
+            )
+            if retry and not _HUMBLE_RE.search(retry):
+                answer = retry
+        except Exception:
+            pass
+
+    # 后面几个"重说一遍"的兜底（被夸却谦让、被预设带着走）走同一套：
+    # 原地重说一次，还不行就把提示词抹干净再问问——历史里那段顺着说的话
+    # 会一直牵着它，不清掉就永远改不过来。
+    _orig_answer = answer
+
+    # 对方把猜测当定论问（"……才修得起来吧？"），答案里却不能把话掰回来。
+    # 小模型天生顺着人说话，人设里写"他说的不对就直接说他不对"也没用，
+    # 只能在代码层拦：答完先验一遍，不合格就重答，重答还不合格就用定稿句。
+    # 实测的几种不合格形态：点头（"是的…"）、把错话原样重复一遍、
+    # 拿"书上没记"糊过去、以及绕了半天把"侠名"这个词丢掉（只答"得有人牵头"）。
+    logger.info(f"[核对·调试] ask={_ask!r} lead={_is_leading_question(_ask)} contra={_contradicts_lore(_ask)} agree={bool(_AGREE_OPEN.search(answer))} dodge={bool(_DODGE_RE.search(answer))} ans={answer[:36]!r}")
+    if _is_yes_man_answer(_ask, answer):
+        logger.info(f"[核对] 对方带了预设，它顺着说了：{answer[:30]}")
+        _denials = random.choice([
+            '"不全是。"', '"没那么一说。"', '"这话不对。"', '"谁跟您说的？"',
+        ])
+        _truth = _lore_correction(_ask)
+        _retry_sys = extra_sys + "\n" + (
+            "内部备忘（绝不复述本段）：\n"
+            "对方这一句把自己的猜测当成了定论，而这个猜测是不对的。\n"
+            f"下一句必须以 {_denials} 开头，再用一句话把对的说法讲清楚"
+            + (f"，大意是：{_truth}\n" if _truth else "。\n")
+            + "开头不许用：是的、对、没错、确实、正是、当然、的确、这话您说得对。\n"
+            "也不许说「书上没记」「不敢妄言」「不清楚」——这条你心里有数。"
+        )
+        answer = await _rerun_until_ok(_ask, to_model, _retry_sys, _lore_correction(_ask), logger)
+        if answer is None:
+            answer = _orig_answer
 
     # 硬性截断：最多三句（模型不听话时兜底）。
     # 先进历史再截断的话，历史里存的是"用户没看见的那半句"，
@@ -442,10 +754,354 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     msgs.append({"role": "user", "content": text})
     msgs.append({"role": "assistant", "content": answer})
 
-    # 长期记忆：只记用户自己的话，不记带记忆块/挑食提醒的拼装版
-    _remember(event.user_id, event.get_plaintext().strip())
+    # 长期记忆：只记用户自己的话，不记带记忆块/挑食提醒的拼装版。
+    # 顺手记下自己答过的那一句——否则下一轮记忆里只有"用户问过什么"，
+    # 模型会以为没答完，把上一个话题的答案硬塞进新回答里。
+    _remember(event.user_id, _extract_text(event), reply=answer)
 
-    await ai_chat.finish(Message(answer))
+    # 兜底：模型直呼 @昵称 而不写 QQ号 时，按对照表换成 @QQ号
+    answer = _convert_at_names(answer, getattr(event, "group_id", 0))
+    # 把模型回复里的 @数字 转成真正的艾特段
+    import re as _re2
+    _out = Message()
+    _pos = 0
+    for _m in _re2.finditer(r"@\s*(\d{5,11})", answer):
+        if _m.start() > _pos:
+            _out.append(MessageSegment.text(answer[_pos:_m.start()]))
+        _out.append(MessageSegment.at(int(_m.group(1))))
+        _pos = _m.end()
+    if _pos < len(answer):
+        _out.append(MessageSegment.text(answer[_pos:]))
+
+    await ai_chat.finish(_with_quote(event, _out if _pos else Message(answer)))
+
+
+# ---------- 联网搜索（问事实才搜） ----------
+
+
+class _Cooldown:
+    """简单的冷却闸：抓取被风控拦了就歇五分钟，别硬怼。"""
+
+    def __init__(self) -> None:
+        self.scrape_until = 0.0
+
+
+_search_cooldown = _Cooldown()
+
+# 问的是"这个游戏里的人物/地点/物件"——答案在人设里，不该去网上找。
+# 注意别把"《苏丹的游戏》开发商是谁"也拦掉：那是关于这游戏本身的事实，恰恰该搜。
+# 所以这里只列专名，不列"苏丹的游戏"这个标题。
+_IN_LORE_RE = __import__("re").compile(
+    r"阿尔图|阿图娜尔|梅姬|奈费勒|鲁梅拉|哈比卜|莎姬|阿卜德|奈布哈尼|哲巴尔|赛里曼|法里斯|"
+    r"阿迪莱|拜玲耶|伊曼|娜依拉|夏玛|贾丽拉|朱娜|布缇娜|阿里木|哈桑|热娜|马尔基娜|"
+    r"玛希尔|麦娜尔|阿穆尔|小星星|法拉杰|杰莫尔|哈马尔|苗圃|舍馆|浴场|欢愉之馆|黑街|"
+    r"垂钓者|苏丹卡|近卫|门客|思潮"
+)
+
+# 只在这些"客观事实"特征出现时才搜：模型对这类问题最爱编。
+# 闲聊、要书、撒娇、骂人一律不搜——否则每条都多两秒、还容易答得不像阿萨尔。
+_FACT_RE = __import__("re").compile(
+    r"是谁|叫什么|什么名字|哪一年|哪年|什么时候|多少|几几年|哪个|出自|作者|原型|"
+    r"的?父亲|的?母亲|的?儿子|的?女儿|的?老婆|的?丈夫|主演|导演|发行|上映|"
+    r"最新|现在.{0,4}(?:多少|几|哪)|是不是|有没有|对不对|你知道吗|你知不知道"
+)
+_CHITCHAT_RE = __import__("re").compile(
+    r"^嗨|^哈喽|^你好|在吗|在不在|早|晚安|吃了吗|谢谢|再见|陪我聊|讲个|说个|来点|"
+    r"推荐|给我看|我想买|多少钱|要钱|买书|卖书"
+)
+
+
+_SELF_RE = __import__("re").compile(r"你是谁|你叫什么|你多大|你几岁|你的?名字|你是干什么|你这店|你卖")
+
+
+# 夸人的话：你真会说话 / 你人真好 / 好喜欢你 / 嘴真甜 …
+_PRAISE_RE = __import__("re").compile(
+    r"真会说话|嘴真甜|嘴好甜|说得好听|人真好|你真好|好喜欢你|喜欢你|你好棒|真厉害|好厉害|"
+    r"真聪明|好聪明|有魅力|迷人|好温柔|好可爱|你真好玩|有意思"
+)
+# 自谦的口头禅：一旦出现在被夸的回答里，就是要改口了
+_HUMBLE_RE = __import__("re").compile(
+    r"过誉|过奖|哪里哪里|不敢当|谬赞|拙|浅薄|不才|算不上|谈不上|不过是|罢了|"
+    r"只是个|只是.{0,6}读书|只是.{0,8}念出来|只是.{0,6}说法|书读得多|读了几年书|混口饭吃|"
+    r"书里的话|照着书|书本上的"
+)
+
+
+def _is_praise(text: str) -> bool:
+    return bool(_PRAISE_RE.search(text or ""))
+
+
+async def _rerun_until_ok(question: str, msgs: List[dict], extra_sys: str,
+                          fallback: str, log) -> str | None:
+    """重说一遍，直到它不再顺着对方说话；实在改不过来就用定稿句。
+
+    为什么要在原地问一遍、还要抹掉历史再问一遍：
+    glm-4-flash 会把"接在错话后面"当成任务的延续，原地重说往往只是换个说法
+    继续顺着说。把这一轮之前的历史整体让位给一句干净的提示，它才当新问题答。
+    """
+    for attempt in (1, 2):
+        try:
+            retry = await call_llm(msgs, extra_system=extra_sys)
+        except Exception:
+            continue
+        if retry and not _is_yes_man_answer(question, retry):
+            return retry
+        log.info(f"[核对] 第{attempt}次重说仍不合格：{(retry or '')[:30]}")
+        if attempt == 1:
+            # 第二次：历史压到只剩一句，干净问一遍
+            msgs = [{"role": "user", "content": question}]
+    if fallback:
+        log.info("[核对] 改用定稿句")
+        return fallback
+    return None
+
+
+def _is_self_inquiry(text: str) -> bool:
+    """问阿萨尔自己是谁的——不该搜网，它当然知道自己是谁。"""
+    return bool(_SELF_RE.search(text))
+
+
+# 对方把自己的猜测当定论问："舍馆要侠名才修得起来吧？""是不是……"
+_LEADING_Q = __import__("re").compile(r"(吧|对不对|是不是|对吧|是吧)[？?。！!\s]*$")
+# 顺从式开口：一上来就点头（句首可能先来一句"这城里的规矩，"这种前置，也得算）
+_AGREE_OPEN = __import__("re").compile(
+    r"^[\s，。！、]{0,3}(?:[^。！？]{0,12}[，,])?\s*(嗯[，,]\s*)?(是的|对啊|对的|没错|确实|正是|"
+    r"当然|的确|是这样的|您说得对|你说得对|这话您说得对|您说得没错|说得对)"
+)
+# 反过来：这几个是**合格**的开头，判定时要先摘出去，不能被上面误伤。
+_NEG_OPEN = __import__("re").compile(r"不全是|不是的|不是那么说|没那么一说|谁跟您说的|这话不对")
+# 装糊涂式闪避：把该表态的问题推给"书上没记"
+_DODGE_RE = __import__("re").compile(r"书上没记|不敢妄言|不太清楚|说不准|没听过这说法")
+
+
+def _echoes_premise(question: str, answer: str) -> bool:
+    """答案一开头就把对方那句错误预设原样重复了一遍——等于点了头。
+
+    模型很爱这么答："舍馆要侠名才修得起来。没有侠名，单靠财力是不够的。"
+    一个字都没认，但把错的说得比谁都肯定，比"是的"更糟。
+    """
+    q = __import__("re").sub(r"[\s，。！？、?！]", "", question or "")
+    q = __import__("re").sub(r"(吧|对不对|是不是|对吧|是吧)$", "", q)
+    a = __import__("re").sub(r"[\s，。！？、?！]", "", answer or "")
+    if len(q) < 6 or not a:
+        return False
+    return a.startswith(q[: min(len(q), 14)])
+
+
+def _is_leading_question(text: str) -> bool:
+    """这句是不是"带预设的问法"，即把猜测塞给你、等你点头。"""
+    return bool(_LEADING_Q.search((text or "").strip()))
+
+
+def _is_yes_man_answer(question: str, answer: str) -> bool:
+    """对带预设的问法，答得等于把对方那个错的预设放过去了。
+
+    四种都算不合格：
+    1. 嘴上点头（"是的""这话您说得对"）；
+    2. 一字不改把对方那句错话重复一遍；
+    3. 拿"书上没记""不敢妄言"把该表态的问题糊过去；
+    4. 绕开那个词不谈（问侠名，答"得有人牵头"）——等于默认。
+    前三种是"答错"，第四种是"没答"，对提问的人一样没用。
+
+    只在"对方的预设确实和设定相反"时才算——否则人家问得对，点头就该点头。
+    """
+    if not _is_leading_question(question):
+        return False
+    a = answer or ""
+    # 开头就把他那句错话否回去的，已经过关了——后面说什么都是补救。
+    if _NEG_OPEN.search(a[:24]):
+        return False
+    if not _contradicts_lore(question):
+        return False
+    topic = next((t for t, bad in _WRONG_LORE if t in question), "")
+    if _AGREE_OPEN.search(a) or _DODGE_RE.search(a) or _echoes_premise(question, a):
+        return True
+    # 以下只处理"没正面表态"这一类：嘴上没说"是的"，也没开头否，
+    # 但把一个错的预设当背景用了——要么整句在复述它，要么绕开不谈。
+    if not topic:
+        return False
+    if topic not in a:
+        return True
+    quote_words = ("一开始", "不费", "搭得起", "往上", "再修", "不用", "不必", "不是必需")
+    return topic == "舍馆" and not any(w in a for w in quote_words)
+
+
+# 已知的"常见误传"：人设里写清楚了，但群里有人会反着说。
+# 命中才强制纠口——不能拿"吧"当通用信号，否则对方问对了也被怼。
+# 注意第二条：问法里常常只有"修得起来"，没有单字"修"，
+# 之前只挂"修"结果带"吧"的问句一条都没命中，白拦了。
+_WRONG_LORE = (
+    ("舍馆", ("侠名", "修", "搭", "建", "开")),
+    ("苗圃", ("流民",)),
+    ("苏丹卡", ("复原", "重来", "重新")),
+)
+
+
+def _contradicts_lore(text: str) -> bool:
+    t = text or ""
+    for topic, bad in _WRONG_LORE:
+        if topic in t and any(b in t for b in bad):
+            return True
+    return False
+
+
+# 重答仍然顺着说时，直接用的现成纠正句（阿萨尔的口吻，一句话讲清）。
+_LORE_FIX = {
+    "舍馆": "没那么一说。舍馆一开始搭起来不费什么，侠名不够也搭得起；要往上再修一层，才得看侠名。",
+    "苗圃": "不全是。苗圃收的不只是流民，是贫民区的孤儿、阿里木手底的乞儿、舍馆后街的流浪儿，一样一样进来的。",
+    "苏丹卡": "这话不对。折掉的卡不会复原，二十八张抽完才算完，城里人就赌这个。",
+}
+
+
+def _lore_correction(text: str) -> str:
+    t = text or ""
+    for topic, bad in _WRONG_LORE:
+        if topic in t and any(b in t for b in bad):
+            return _LORE_FIX.get(topic, "")
+    return ""
+
+
+def _needs_fact(text: str) -> bool:
+    """判断这句是不是在问可以查证的客观事实（而不是闲聊/买卖/情绪）。
+
+    注意"苏丹的游戏里的人"不算——阿尔图的老婆是谁、梅姬干什么的，
+    这些答案就在人设里，模型自己知道。去搜反而会把答对的改成"说不准"。
+    """
+    t = text.strip()
+    if len(t) < 5:
+        return False
+    if _CHITCHAT_RE.search(t):
+        return False
+    if _IN_LORE_RE.search(t):
+        return False
+    return bool(_FACT_RE.search(t))
+
+
+def _web_snippets(query: str, max_results: int = 3) -> str:
+    """联网检索，返回拼好的摘要。
+
+    只走网页抓取：搜狗优先、百度兜底。没有别的路子——
+    智谱的 web-search-pro 是付费工具，不在 glm-4-flash 的免费额度里，
+    留着它只会让每次问事实都先白等一轮 429。
+    """
+    q = _re_mod.sub(r"[\s]+", " ", (query or "")).strip()
+    if not q:
+        return ""
+    if _time.time() < _search_cooldown.scrape_until:
+        logger.info("[联网] 抓取冷却中，跳过")
+        return ""
+    return _search_via_scrape(q, max_results)
+
+
+# ---------- 抓搜狗/百度结果页（免费，唯一可用的联网方式） ----------
+_SCRAPE_UA = (
+    "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+)
+_SCRAPE_HEADERS = {
+    "User-Agent": _SCRAPE_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+# 命中这些说明被风控拦了，不是"没结果"
+_BLOCK_WORDS = ("安全验证", "百度安全", "验证码", "人机验证", "captcha", "unusual traffic")
+
+
+def _html_clean(s: str) -> str:
+    s = _re_mod.sub(r"<[^>]+>", "", s or "")
+    for a, b in (("&amp;", "&"), ("&quot;", '"'), ("&nbsp;", " "),
+                 ("&lt;", "<"), ("&gt;", ">"), ("&#39;", "'")):
+        s = s.replace(a, b)
+    return _re_mod.sub(r"\s+", " ", s).strip()
+
+
+def _scrape_sogou(q: str):
+    import requests as _rq
+
+    r = _rq.get("https://www.sogou.com/web", params={"query": q},
+                headers=_SCRAPE_HEADERS, timeout=10)
+    r.encoding = "utf-8"
+    html = r.text
+    if any(w in html for w in _BLOCK_WORDS):
+        return None
+    out = []
+    for m in _re_mod.finditer(r"<h3[^>]*>(.*?)</h3>", html, _re_mod.S):
+        a = _re_mod.search(r"<a[^>]*>(.*?)</a>", m.group(1), _re_mod.S)
+        title = _html_clean(a.group(1) if a else m.group(1))
+        if not (4 <= len(title) <= 90):
+            continue
+        tail = html[m.end(): m.end() + 1500]
+        p = _re_mod.search(
+            r'class="[^"]*(?:text-layout|space-txt|fz-mid|str-text)[^"]*"[^>]*>(.*?)</',
+            tail, _re_mod.S)
+        out.append((title, _html_clean(p.group(1)) if p else ""))
+        if len(out) >= 8:
+            break
+    return out or None
+
+
+def _scrape_baidu(q: str):
+    import requests as _rq
+
+    r = _rq.get("https://www.baidu.com/s", params={"wd": q},
+                headers=_SCRAPE_HEADERS, timeout=10)
+    r.encoding = "utf-8"
+    html = r.text
+    if any(w in html for w in _BLOCK_WORDS):
+        return None
+    out = []
+    for m in _re_mod.finditer(r"<h3[^>]*>(.*?)</h3>", html, _re_mod.S):
+        title = _html_clean(m.group(1))
+        if not (4 <= len(title) <= 90):
+            continue
+        tail = html[m.end(): m.end() + 1200]
+        p = _re_mod.search(
+            r'class="[^"]*(?:content-right|c-abstract|cos-line-clamp)[^"]*"[^>]*>(.*?)</',
+            tail, _re_mod.S)
+        out.append((title, _html_clean(p.group(1)) if p else ""))
+        if len(out) >= 8:
+            break
+    return out or None
+
+
+def _relevance(title: str, body: str, q: str) -> int:
+    """粗打分：问句里的词命中几个，摘要里有没有具体答案的样子。"""
+    text = f"{title} {body}"
+    keys = [w for w in _re_mod.split(r"[\s，。？?、]+", q) if len(w) >= 2]
+    hit = sum(1 for k in keys if k in text)
+    # 摘要里出现括号/年份/引号包着的专名，往往就是答案
+    if _re_mod.search(r"《[^》]+》\s*是|[（(]\s*[A-Za-z·]+|[A-Za-z]{3,}", text):
+        hit += 1
+    return hit
+
+
+def _search_via_scrape(q: str, max_results: int = 3) -> str:
+    for name, fn in (("搜狗", _scrape_sogou), ("百度", _scrape_baidu)):
+        try:
+            rows = fn(q)
+        except Exception as e:
+            logger.warning(f"[联网] {name}抓取失败：{type(e).__name__}")
+            continue
+        if not rows:
+            continue
+
+        # 相关度排序。门槛放到 0：宁可多带两条让模型自己挑，
+        # 也别因为"标题里没写'周杰伦'"就把整页丢掉（实测就栽在这）。
+        # 只把明显的导航垃圾（大家还在搜/相关搜索…）剔掉。
+        ranked = sorted(rows, key=lambda ts: _relevance(ts[0], ts[1], q), reverse=True)
+        keep = [(t, s) for t, s in ranked
+                if not _re_mod.search(r"大家还在搜|相关搜索|其他人还搜|热搜榜|展开全部", t)
+                and (len(t) >= 6 or s)][:max_results]
+        if not keep:
+            continue
+
+        logger.info(f"[联网] 走{name}抓到 {len(keep)} 条")
+        return "\n".join(f"- {t}：{s}" if s else f"- {t}" for t, s in keep)
+
+    # 两个都没成：冷却五分钟，别每条消息都去撞风控
+    _search_cooldown.scrape_until = _time.time() + 300
+    logger.warning("[联网] 搜狗/百度都没抓到期，五分钟后重试")
+    return ""
 
 
 def trim_to_sentences(text: str, max_sentences: int = 3) -> str:
@@ -470,19 +1126,80 @@ def trim_to_sentences(text: str, max_sentences: int = 3) -> str:
     return kept
 
 
-async def call_llm(messages: List[dict]) -> str:
+_ROSTER_CACHE: Dict[int, str] = {}
+_ROSTER_MAP: Dict[int, Dict[str, int]] = {}
+
+
+def _convert_at_names(answer: str, group_id: int) -> str:
+    """把回复里的 @昵称 换成 @QQ号，交给下一段正则转成真艾特段。
+
+    模型（小模型尤其）经常无视备忘直呼昵称，发送端只认 @数字——
+    这里按群成员对照表兜底，昵称命中才换，纯文字提到的不动。
+    全数字的跳过（那是 QQ 号，交给原有逻辑处理）。
+    """
+    rmap = _ROSTER_MAP.get(group_id) or {}
+    if not rmap or not answer or "@" not in answer:
+        return answer
+
+    def _sub(m: "_re.Match") -> str:
+        name = m.group(1)
+        if name.isdigit():
+            return m.group(0)
+        uid = rmap.get(name)
+        return f"@{uid}" if uid else m.group(0)
+
+    try:
+        return _re.sub(r"@\s*([^@\d\s，。！？~、]{1,24})(?=[，。！？~\s、]|$)", _sub, answer)
+    except Exception:
+        return answer
+
+
+async def _group_roster(bot: Bot, group_id: int) -> str:
+    """群成员 昵称=QQ号 对照表，进程内缓存。找不到就返回空串。"""
+    if group_id in _ROSTER_CACHE:
+        return _ROSTER_CACHE[group_id]
+    try:
+        members = await bot.call_api("get_group_member_list", group_id=group_id)
+        items = []
+        nmap: Dict[str, int] = {}
+        for m in members:
+            name = m.get("card") or m.get("nickname") or ""
+            uid = m.get("user_id")
+            if name and uid:
+                items.append(f"{name}={uid}")
+                if name not in nmap:
+                    nmap[name] = int(uid)
+        _ROSTER_CACHE[group_id] = "；".join(items)
+        _ROSTER_MAP[group_id] = nmap
+    except Exception as e:
+        logger.warning(f"取群成员列表失败：{type(e).__name__} {e}")
+        _ROSTER_CACHE[group_id] = ""
+    return _ROSTER_CACHE[group_id]
+
+
+async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
+    # glm-4.7-flash 及以上默认开深度思考，正文会被思考过程吃空——显式关闭。
+    # 免费档限流较激进，SDK 层加 3 次指数退避重试。
+    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=3)
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+    if extra_system:
+        # 内部备忘放在末尾的 system 层，模型只参考不复述
+        full_messages.append({"role": "system", "content": extra_system})
 
     resp = await client.chat.completions.create(
         model=MODEL,
         messages=full_messages,
         max_tokens=MAX_TOKENS,
         temperature=TEMPERATURE,
+        extra_body={"thinking": {"type": "disabled"}},
     )
-    return (resp.choices[0].message.content or "").strip()
+    text = (resp.choices[0].message.content or "").strip()
+    if not text:
+        # 思考模式万一没关干净会导致空正文——抛错交给上层重试机制
+        raise RuntimeError("模型返回空正文(疑似思考模式未关闭)")
+    return text
 
 
 # 清空对话记忆

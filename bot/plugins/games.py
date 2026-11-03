@@ -1,15 +1,15 @@
 """
 店内游戏 —— 说书人的消遣
 
-命令（裸词或带斜杠均可）：
-- 掷骰            → 阿萨尔掷两把骰子，报点数
-- 决斗 @某人       → 你和对方各掷三把，点数大者胜
-- 猜数字           → 开一局：猜 1~100 里阿萨尔心里想的数
-- 猜 50 / 猜一百    → 出手（本局进行中才认）
-- 不玩了           → 认输，公布答案
-- 谜语            → 说书人出一个谜面
-- 答 xxx          → 抢答（谜面挂着时才认）
-- 揭晓            → 没人猜中时公布答案
+命令（一律要 @ 阿萨尔，防裸词误触）：
+- @我 掷骰       → 阿萨尔掷三把骰子，报点数
+- @我 决斗 @某人  → 你和对方各掷三把，点数大者胜
+- @我 猜数字      → 开一局：猜 1~100 里阿萨尔心里想的数
+- @我 猜 50 / 猜一百 → 出手（本局进行中才认）
+- @我 不玩了      → 认输，公布答案
+- @我 谜语        → 说书人出一个谜面
+- @我 答 xxx      → 抢答（谜面挂着时才认）
+- @我 揭晓        → 没人猜中时公布答案
 
 设计说明：
 - 猜数字按群分局，同一群同时只有一局，谁开谁出题的就是机器人自己
@@ -26,13 +26,17 @@ from nonebot.adapters.onebot.v11 import (
     PrivateMessageEvent,
 )
 from nonebot.params import CommandArg
+from nonebot.rule import to_me
+
+# 所有游戏一律 to_me：群聊必须 @ 阿萨尔才触发（私聊天然算）。
+# 否则"谜语""猜数字"这类裸词，群友闲聊提到就会误触发。
 
 # ============================================================
 # 掷骰 / 决斗
 # ============================================================
 
 dice_cmd = on_command("掷骰", aliases={"骰子", "掷骰子", "决斗"},
-                      priority=20, block=True)
+                      rule=to_me(), priority=20, block=True)
 
 DICE_FLAVOR_WIN = [
     "点子正，手气也好。",
@@ -81,11 +85,11 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
 # 猜数字
 # ============================================================
 
-guess_start = on_command("猜数字", aliases={"猜数"}, priority=20, block=True)
+guess_start = on_command("猜数字", aliases={"猜数"}, rule=to_me(), priority=20, block=True)
 # 出手用 on_message 抓，因为"猜 50"不是固定命令词。
 # 必须用 block=False：这两个匹配器对每条消息都会触发，
 # block=True 会把没命中的消息也拦下来，关键词回复和 AI 就全哑了。
-guess_do = on_message(priority=30, block=False)
+guess_do = on_message(rule=to_me(), priority=30, block=False)
 
 # {group_id: {"answer": int, "count": int}}
 GUESS_GAMES: dict[int, dict] = {}
@@ -180,8 +184,8 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
 # 谜语
 # ============================================================
 
-riddle_cmd = on_command("谜语", aliases={"出谜", "猜谜", "说书"}, priority=20, block=True)
-riddle_answer = on_message(priority=30, block=False)
+riddle_cmd = on_command("谜语", aliases={"出谜", "猜谜", "说书"}, rule=to_me(), priority=20, block=True)
+riddle_answer = on_message(rule=to_me(), priority=30, block=False)
 
 # (谜面, 谜底, 提示)
 RIDDLES = [

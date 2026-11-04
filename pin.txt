@@ -1,1 +1,1 @@
-s21 RUN adb connect 192.168.31.28:41181
+s22 RUN adb kill-server; echo 服务已清理

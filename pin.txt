@@ -1,1 +1,1 @@
-s1004 RUN date; id -u; adb --version 2>&1 | head -2; echo ==proc总数==; ls /proc | grep -c "^[0-9]"; echo ==按UID和命令==; for d in /proc/[0-9]*; do u=$(awk "/^Uid:/{print \$2; exit}" $d/status 2>/dev/null); n=$(cat $d/comm 2>/dev/null); echo "$u $n"; done | sort | uniq -c | sort -rn | head -30; echo ==end==
+s11 PAIR 43163 497489 41181

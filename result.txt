@@ -1,3 +1,3 @@
-Thu Nov  5 01:04:09 CST 2026
-10122
-sh: 1: h: not found
+Enter pairing code: error: protocol fault (couldn't read status message): Success
+failed to connect to 192.168.31.28:41181
+List of devices attached

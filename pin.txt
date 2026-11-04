@@ -1,1 +1,1 @@
-s36 RUN adb kill-server; (ADB_TRACE=all nohup adb nodaemon server > ~/tr.log 2>&1 &); sleep 3; adb devices 2>&1; echo ==常驻追踪已布防==
+s37 RUN adb pair 192.168.31.28:37583 208989 2>&1; adb pair 192.168.31.28:37583 208989 2>&1; echo ==握手日志==; tail -c 3200 ~/tr.log

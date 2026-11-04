@@ -1,1 +1,1 @@
-s31 RUN echo v2通道OK; adb kill-server 2>&1; adb version 2>&1 | head -2; adb devices 2>&1
+s32 RUN ADB_TRACE=all adb pair 192.168.31.28:39017 721777 2>&1 | tail -c 4000; adb connect 192.168.31.28:41181 2>&1; adb devices 2>&1

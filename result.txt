@@ -1,1 +1,3 @@
-监工在线,通道正常
+Enter pairing code: error: protocol fault (couldn't read status message): Success
+failed to connect to 192.168.31.28:41181
+List of devices attached

@@ -1,1 +1,1 @@
-s22 RUN adb kill-server; echo 服务已清理
+s31 RUN echo v2通道OK; adb kill-server 2>&1; adb version 2>&1 | head -2; adb devices 2>&1

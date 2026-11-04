@@ -1,3 +1,2 @@
-sh: 1: cd: can't cd to /root/Napcat
-cp: cannot stat '/root/Napcat/opt/QQ/resources/app/app_launcher/napcat/cache/qrcode.png': No such file or directory
-==QQ进程==
+sh: 1: cannot create /data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/root/start_nap.sh: Directory nonexistent
+==结束==

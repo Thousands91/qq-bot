@@ -1,1 +1,1 @@
-s38 RUN rm -f ~/ports.log; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35; do date +%T >> ~/ports.log; netstat -tln 2>/dev/null | awk "{print \$4}" | grep -E ":(3|4)[0-9]{4}$" >> ~/ports.log; sleep 2; done; echo ==扫描结束==; tail -c 2800 ~/ports.log
+s39 RUN which netstat ss busybox 2>&1; echo ==全部监听端口==; netstat -tln 2>&1 | head -25

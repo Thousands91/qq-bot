@@ -1,3 +1,2 @@
-Enter pairing code: error: protocol fault (couldn't read status message): Success
-failed to connect to 192.168.31.28:41181
-List of devices attached
+cannot connect to daemon at tcp:5037: Connection refused
+服务已清理

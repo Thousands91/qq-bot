@@ -1,8 +1,5 @@
 disconnected everything
-39837第1次:failed to connect to '192.168.31.28:39837': Connection refused
-39837第2次:failed to connect to '192.168.31.28:39837': Connection refused
-39837第3次:failed to connect to '192.168.31.28:39837': Connection refused
-41181第1次:failed to connect to '192.168.31.28:41181': Connection refused
-41181第2次:failed to connect to '192.168.31.28:41181': Connection refused
-41181第3次:failed to connect to '192.168.31.28:41181': Connection refused
+failed to connect to '192.168.31.28:39837': Connection refused
 List of devices attached
+
+==重测完成==

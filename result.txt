@@ -1,2 +1,7 @@
+v2通道OK
 cannot connect to daemon at tcp:5037: Connection refused
-服务已清理
+Android Debug Bridge version 1.0.41
+Version 37.0.0p1-android-tools
+* daemon not running; starting now at tcp:5037
+* daemon started successfully
+List of devices attached

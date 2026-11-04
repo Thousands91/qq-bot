@@ -1,3 +1,8 @@
 error: protocol fault (couldn't read status message): Success
-failed to connect to '192.168.31.28:41181': Connection refused
-List of devices attached
+==日志大小==
+805 /data/data/com.termux/files/home/tr.log
+==关键行==
+E0000 00:00:1793813268.885312   25926 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:42065': Connection refused]
+11-05 01:27:48.885 25872 25926 E native  : E0000 00:00:1793813268.885312   25926 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:42065': Connection refused]
+E0000 00:00:1793813268.885731   25926 pairing_client.cpp:119] Unable to start PairingClient connection
+11-05 01:27:48.885 25872 25926 E native  : E0000 00:00:1793813268.885731   25926 pairing_client.cpp:119] Unable to start PairingClient connection

@@ -1,1 +1,1 @@
-s32 RUN ADB_TRACE=all adb pair 192.168.31.28:39017 721777 2>&1 | tail -c 4000; adb connect 192.168.31.28:41181 2>&1; adb devices 2>&1
+s33 RUN adb kill-server; (ADB_TRACE=all timeout 25 adb nodaemon server > ~/tr.log 2>&1 &); sleep 5; adb pair 192.168.31.28:42065 858475; sleep 2; echo ==日志大小==; wc -c ~/tr.log; echo ==关键行==; grep -iE "pair|tls|spake|error|fail|refus|close|reset|connect" ~/tr.log | tail -c 3000

@@ -1,1 +1,1 @@
-s47 RUN adb disconnect 2>/dev/null; for p in 39837 41181; do for i in 1 2 3; do R=$(adb connect 192.168.31.28:$p 2>&1); echo "$p第${i}次:$R"; case "$R" in *connected*) break 2;; esac; sleep 3; done; done; adb devices
+s48 RUN adb disconnect 2>/dev/null; adb connect 192.168.31.28:39837 2>&1; adb devices 2>&1; echo ==重测完成==

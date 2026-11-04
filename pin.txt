@@ -1,1 +1,1 @@
-s1002 PAIR 40195 218590 41181
+s1003 RUN date; adb --version 2>&1 | head -2; echo ---进程总数---; ps aux | wc -l; echo ---按用户---; ps aux | awk "NR>1{print \$1}" | sort | uniq -c | sort -rn; echo ---按命令---; ps aux | awk "NR>1{print \$11}" | sort | uniq -c | sort -rn | head -25; adb kill-server 2>/dev/null; echo 诊断完成

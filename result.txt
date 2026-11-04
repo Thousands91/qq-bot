@@ -1,4 +1,3 @@
-manifest.json
-rootfs
-shm
-sysdata
+脚本已写入
+码已放进相册,去QQ扫
+==结束==

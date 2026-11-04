@@ -1,0 +1,3 @@
+sh: 1: cd: can't cd to /root/Napcat
+cp: cannot stat '/root/Napcat/opt/QQ/resources/app/app_launcher/napcat/cache/qrcode.png': No such file or directory
+==QQ进程==

@@ -1,2 +1,8 @@
-sh: 1: cannot create /data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/root/start_nap.sh: Directory nonexistent
-==结束==
+容器能进
+guild1.db
+guild1.db-shm
+guild1.db-wal
+opt
+/root/Napcat/opt/QQ/qq
+==找rootfs==
+/data/data/com.termux/files/usr/var/lib/proot-distro/containers/ubuntu

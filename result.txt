@@ -1,7 +1,3 @@
-v2通道OK
-cannot connect to daemon at tcp:5037: Connection refused
-Android Debug Bridge version 1.0.41
-Version 37.0.0p1-android-tools
-* daemon not running; starting now at tcp:5037
-* daemon started successfully
+error: protocol fault (couldn't read status message): Success
+failed to connect to '192.168.31.28:41181': Connection refused
 List of devices attached

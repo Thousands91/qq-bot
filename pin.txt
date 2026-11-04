@@ -1,1 +1,1 @@
-s44 RUN adb connect 192.168.31.28:39837 2>&1; echo ==杀手配置==; adb shell "dumpsys activity settings | grep -iE \"phantom|max_phantom\"" 2>&1 | head -8; echo ==作案记录==; adb shell "dumpsys activity | grep -i phantom" 2>&1 | head -25; echo ==监控开关==; adb shell settings get global settings_enable_monitor_phantom_procs 2>&1
+s45 RUN timeout 40 proot-distro login ubuntu -- bash -c "echo 判决实验跑通; uname -a; date" 2>&1; echo ==实验退出码 $?==

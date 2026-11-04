@@ -1,3 +1,7 @@
-1:Successfully paired to 192.168.31.28:39735 [guid=adb-A7VCUT3804001019-EPtGZx]
-connected to 192.168.31.28:39837
-2147483647
+already connected to 192.168.31.28:39837
+==杀手配置==
+  max_phantom_processes=2147483647
+==作案记录==
+  max_phantom_processes=2147483647
+==监控开关==
+null

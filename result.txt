@@ -1,16 +1,36 @@
-error: protocol fault (couldn't read status message): Success
-error: protocol fault (couldn't read status message): Success
-==握手日志==
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-E0000 00:00:1793813610.152750   31137 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:37583': Connection refused]
-11-05 01:33:30.152 30360 31137 E native  : E0000 00:00:1793813610.152750   31137 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:37583': Connection refused]
-11-05 01:33:30.152 30360 31137 E native  : 
-E0000 00:00:1793813610.153120   31137 pairing_client.cpp:119] Unable to start PairingClient connection
-11-05 01:33:30.153 30360 31137 E native  : E0000 00:00:1793813610.153120   31137 pairing_client.cpp:119] Unable to start PairingClient connection
-11-05 01:33:30.153 30360 31137 E native  : 
-E0000 00:00:1793813610.171733   31139 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:37583': Connection refused]
-11-05 01:33:30.171 30360 31139 E native  : E0000 00:00:1793813610.171733   31139 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:37583': Connection refused]
-11-05 01:33:30.171 30360 31139 E native  : 
-E0000 00:00:1793813610.171824   31139 pairing_client.cpp:119] Unable to start PairingClient connection
-11-05 01:33:30.171 30360 31139 E native  : E0000 00:00:1793813610.171824   31139 pairing_client.cpp:119] Unable to start PairingClient connection
-11-05 01:33:30.171 30360 31139 E native  : 
+==扫描结束==
+01:34:52
+01:34:54
+01:34:56
+01:34:58
+01:35:00
+01:35:02
+01:35:04
+01:35:06
+01:35:08
+01:35:10
+01:35:12
+01:35:14
+01:35:16
+01:35:18
+01:35:20
+01:35:22
+01:35:24
+01:35:26
+01:35:28
+01:35:31
+01:35:33
+01:35:35
+01:35:37
+01:35:39
+01:35:41
+01:35:43
+01:35:45
+01:35:47
+01:35:49
+01:35:51
+01:35:53
+01:35:55
+01:35:57
+01:35:59
+01:36:01

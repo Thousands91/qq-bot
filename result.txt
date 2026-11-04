@@ -1,5 +1,1 @@
-sh: 1: which: not found
-==全部监听端口==
-netstat: no support for `AF INET (tcp)' on this system.
-Active Internet connections (only servers)
-Proto Recv-Q Send-Q Local Address           Foreign Address         State      
+sh: 1: Syntax error: "(" unexpected

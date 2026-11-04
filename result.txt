@@ -1,8 +1,16 @@
-cannot connect to daemon at tcp:5037: Connection refused
+1:* daemon not running; starting now at tcp:5037
+* daemon started successfully
 error: protocol fault (couldn't read status message): Success
-==日志==
-805 /data/data/com.termux/files/home/tr.log
-E0000 00:00:1793813311.917128   27127 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:42867': Connection refused]
-11-05 01:28:31.917 27099 27127 E native  : E0000 00:00:1793813311.917128   27127 pairing_client.cpp:133] Failed to start pairing connection client [failed to connect to '192.168.31.28:42867': Connection refused]
-E0000 00:00:1793813311.918351   27127 pairing_client.cpp:119] Unable to start PairingClient connection
-11-05 01:28:31.918 27099 27127 E native  : E0000 00:00:1793813311.918351   27127 pairing_client.cpp:119] Unable to start PairingClient connection
+2:error: protocol fault (couldn't read status message): Success
+3:error: protocol fault (couldn't read status message): Success
+4:error: protocol fault (couldn't read status message): Success
+5:error: protocol fault (couldn't read status message): Success
+6:error: protocol fault (couldn't read status message): Success
+7:error: protocol fault (couldn't read status message): Success
+8:error: protocol fault (couldn't read status message): Success
+9:error: protocol fault (couldn't read status message): Success
+10:error: protocol fault (couldn't read status message): Success
+failed to connect to '192.168.31.28:41181': Connection refused
+adb: no devices/emulators found
+adb: no devices/emulators found
+adb: no devices/emulators found

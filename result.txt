@@ -1,7 +1,4 @@
-already connected to 192.168.31.28:39837
-==杀手配置==
-  max_phantom_processes=2147483647
-==作案记录==
-  max_phantom_processes=2147483647
-==监控开关==
-null
+判决实验跑通
+Linux localhost 6.17.0-PRoot-Distro #1 SMP PREEMPT_DYNAMIC Fri, 10 Oct 2025 00:00:00 +0000 aarch64 aarch64 aarch64 GNU/Linux
+Thu Nov  5 07:27:52 CST 2026
+==实验退出码 0==

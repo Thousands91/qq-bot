@@ -1,5 +1,0 @@
-disconnected everything
-failed to connect to '192.168.31.28:39837': Connection refused
-List of devices attached
-
-==重测完成==

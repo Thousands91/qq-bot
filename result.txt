@@ -1,3 +1,4 @@
-sh: 1: cannot create /data/data/com.termux/files/usr/var/lib/proot-distro/containers/ubuntu/root/start_nap.sh: Directory nonexistent
-sh: 1: echo: echo: I/O error
-==结束==
+manifest.json
+rootfs
+shm
+sysdata

@@ -892,8 +892,10 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 否则会被下面的 except 截下来再补一句"灯灭了"。
     try:
         answer = await call_llm(to_model, extra_system=extra_sys)
-    except Exception as e:
-        await ai_chat.finish(_with_quote(event, Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络")))
+    except Exception as e:  # noqa: BLE001
+        # 报错细节只进日志，绝不发给聊天对象（2026-11-05 实锤：APITimeoutError
+        # 原文被当回复发进私聊，观感极差）。失败就沉默，等下一条消息自然恢复。
+        logger.error(f"[对话] LLM 全链失败({type(e).__name__}): {e}")
         return
 
     # 联网搜索：对方在问客观事实（人名/作品/日期/版本…）时，先搜一圈再重答。
@@ -1438,11 +1440,19 @@ async def _group_roster(bot: Bot, group_id: int) -> str:
 async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     from openai import AsyncOpenAI
 
-    # 模型降级链：主力 glm-4.7-flash（对话质量远胜 4-flash：会主动改称呼、
-    # 接住表情梗、不出戏），免费档限流(429)激进——给主模型 2 次重试扛突发
-    # 限流（2026-11-05 实测单次必撞），仍失败立刻降级 glm-4-flash 保底。
-    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=2)
-    client_fb = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=2)
+    # 模型降级链：主力 glm-4.7-flash（对话质量远胜 4-flash），免费档限流激进。
+    # 延迟红线（2026-11-05 晚高峰实锤：无超时上限时 APITimeoutError 挂到用户
+    # 侧等半分钟+）：单次请求 20s 硬超时、主模型只重试 1 次，仍失败降级
+    # glm-4-flash 保底。全链最坏 ~60s 封顶，不再无限吊着。
+    _FB_REMIND = (
+        "（用更简单的中文说话。铁律：① 绝不说「您的提问/智慧/求知欲如同…」"
+        "这类比喻夸奖；② 结尾不许挂emoji；③ 称呼按对方要求来；④ 全程只说一两句，"
+        "像市集里聊天的书商，不像写贺卡的。）"
+    )
+    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL,
+                         max_retries=1, timeout=20.0)
+    client_fb = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL,
+                            max_retries=1, timeout=20.0)
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     if extra_system:
         # 内部备忘放在末尾的 system 层，模型只参考不复述
@@ -1454,9 +1464,13 @@ async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     for _mdl in _chain:
         _cli = client if _mdl == MODEL else client_fb
         try:
+            _msgs = full_messages
+            if _mdl != MODEL:
+                # 保底弱模型吃不住长人设的尾部规则——末尾补一条短铁律提醒
+                _msgs = full_messages + [{"role": "system", "content": _FB_REMIND}]
             resp = await _cli.chat.completions.create(
                 model=_mdl,
-                messages=full_messages,
+                messages=_msgs,
                 max_tokens=MAX_TOKENS,
                 temperature=TEMPERATURE,
                 extra_body={"thinking": {"type": "disabled"}},

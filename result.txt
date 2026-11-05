@@ -1,28 +1,10 @@
-==登录状态==
-=== 登录状态（权威判定）===
-[在线] 已登录，一切正常
-阶段: ready
-==心跳==
-[11-05 00:54] 心跳:循环正常,LAST=140
-[11-05 18:24] 看护：NapCat不在
-[11-05 18:24] 看护:自动拉起NapCat(24h内第2次)
-==全家进程==
- 7424  7423       06:14 /root/bot/venv/bin/python main.py
- 7432  9227       06:14 bash /root/remote_ctl.sh
- 7727  9227       06:09 bash /root/azar_guard.sh
-15847 15843       02:29 /bin/sh /usr/bin/xvfb-run -a /root/Napcat/opt/QQ/qq --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --js-flags=--max-old-space-size=512
-15865 15847       02:29 Xvfb :167 -screen 0 1280x1024x24 -nolisten tcp -auth /tmp/xvfb-run.nL7dgP/Xauthority
-15870 15847       02:28 /root/Napcat/opt/QQ/qq --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --js-flags=--max-old-space-size=512
-15872 15870       02:28 /root/Napcat/opt/QQ/qq --type=zygote --no-zygote-sandbox --no-sandbox
-15873 15870       02:28 /root/Napcat/opt/QQ/qq --type=zygote --no-sandbox
-15912 15872       02:25 /root/Napcat/opt/QQ/qq --type=zygote --no-zygote-sandbox --no-sandbox
-==qq的DISPLAY==
-DISPLAY=:167
-DISPLAY=:167
-DISPLAY=:167
-DISPLAY=:167
-DISPLAY=:167
-DISPLAY=:167
-==插件加载==
+==QQ全家==
+6
+==bot==
+1
+==循环守护==
+2
+==容器内总数==
+27
+==Termux侧总数==
 24
-0

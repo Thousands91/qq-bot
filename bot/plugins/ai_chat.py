@@ -892,10 +892,8 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 否则会被下面的 except 截下来再补一句"灯灭了"。
     try:
         answer = await call_llm(to_model, extra_system=extra_sys)
-    except Exception as e:  # noqa: BLE001
-        # 报错细节只进日志，绝不发给聊天对象（2026-11-05 实锤：APITimeoutError
-        # 原文被当回复发进私聊，观感极差）。失败就沉默，等下一条消息自然恢复。
-        logger.error(f"[对话] LLM 全链失败({type(e).__name__}): {e}")
+    except Exception as e:
+        await ai_chat.finish(_with_quote(event, Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络")))
         return
 
     # 联网搜索：对方在问客观事实（人名/作品/日期/版本…）时，先搜一圈再重答。
@@ -1452,13 +1450,16 @@ async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL,
                          max_retries=1, timeout=20.0)
     client_fb = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL,
-                            max_retries=1, timeout=20.0)
+                            max_retries=0, timeout=20.0)
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     if extra_system:
         # 内部备忘放在末尾的 system 层，模型只参考不复述
         full_messages.append({"role": "system", "content": extra_system})
 
-    _chain = list(dict.fromkeys([MODEL, "glm-4-flash"]))
+    # 降级链：4.7-flash（主力）→ 4.5-flash（中级替补，实测无模板腔、人设在线）
+    # → 4-flash（保底）。替补共用短铁律提醒压模板腔；替补单次尝试不重试，
+    # 全链超时上界 ~80s，常态 3~20s。
+    _chain = list(dict.fromkeys([MODEL, "glm-4.5-flash", "glm-4-flash"]))
     resp = None
     last_err: Exception | None = None
     for _mdl in _chain:

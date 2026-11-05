@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import os
 import random
+import re
 
 import aiohttp
 from ddgs import DDGS
@@ -91,6 +92,9 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
         if tbib_tags is None:
             bt_raw = await translate_tags(query)
             tbib_tags = [t.strip() for t in bt_raw.split(",") if t.strip()] if bt_raw else None
+            if tbib_tags:
+                # AI 翻译不可靠（圈内写法对不上），过一遍图库标签目录校正
+                tbib_tags = await _fix_tbib_tags(tbib_tags)
         lolicon_first = random.random() < 0.5
         got_dup = False
         for attempt in range(2):
@@ -168,6 +172,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                     bt = await translate_tags(query)
                     if bt:
                         tbib_tags = [t.strip() for t in bt.split(",") if t.strip()] or None
+                        tbib_tags = await _fix_tbib_tags(tbib_tags)
                 if tbib_tags:
                     _img = await fetch_tbib_bytes(tbib_tags)
                     if _img:
@@ -305,23 +310,93 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
         if data:
             return data
         # 交集空手 → 逐标签单独搜（保留"色图"属性 rating:explicit）
+        # 注：不做无分级兜底——用户明确要求色图命令只出 R18，
+        # 库内未打分级标的图默认全年龄，宁可如实说没有也不发（2026-11-05）。
         for t in tags:
             if t.startswith("rating:"):
                 continue
             data = await _tbib_query_bytes(f"rating:explicit+{t}")
             if data:
                 return data
-        # 最后兜底：不带分级限制再试一轮。库内个别帖没有 rating 标注
-        # （如 diaochan_(honor_of_kings) 唯一一张图），会被 explicit 过滤
-        # 整体漏掉——手写映射来的精确标签，有图总比空手强。
-        for t in tags:
-            if t.startswith("rating:"):
-                continue
-            data = await _tbib_query_bytes(t)
-            if data:
-                return data
         return None
     return await _tbib_query_bytes("rating:explicit")
+
+
+# —— 标签目录自动校正（2026-11-05）——
+# 背景：AI 把"苏丹的游戏"翻成不存在的 sultans_game（真实标签是 sultan's_game），
+# 这类"圈内写法"（撇号、括号后缀、单复数）词典翻译永远对不上。手写映射表
+# 无法穷举，故加通用层：拿 AI 的翻译去查图库自动补全目录，查无此词就逐级
+# 缩短前缀拉候选、按相似度挑最接近的真实标签。
+# 接口：GET /autocomplete.php?q=<前缀> → JSON [{"label":"tag (N)","value":"tag"}]
+# value 是 HTML 转义的（&#039; = 撇号），必须还原。
+import html as _html
+
+TBIB_BASE = "https://tbib.org"
+_TAG_INDEX_CACHE: dict[str, list[tuple[str, int]]] = {}
+
+
+async def _tbib_tag_index(prefix: str) -> list[tuple[str, int]]:
+    """查标签自动补全目录（前缀匹配），返回 [(标签名, 图数)]。失败返回 []。"""
+    key = prefix.lower()
+    if key in _TAG_INDEX_CACHE:
+        return _TAG_INDEX_CACHE[key]
+    url = f"{TBIB_BASE}/autocomplete.php?q={prefix}"
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=10),
+                headers={"User-Agent": _TBIB_UA},
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                arr = await resp.json(content_type=None)
+                tags = []
+                for it in (arr or []):
+                    v = _html.unescape(str(it.get("value", ""))).strip()
+                    if not v:
+                        continue
+                    label = _html.unescape(str(it.get("label", "")))
+                    cnt_str = label.rsplit("(", 1)[-1].rstrip(") ").strip()
+                    try:
+                        cnt = int(cnt_str)
+                    except ValueError:
+                        cnt = 0
+                    tags.append((v, cnt))
+                _TAG_INDEX_CACHE[key] = tags
+                return tags
+    except Exception:
+        return []
+
+
+async def _fix_tbib_tags(tags: list[str]) -> list[str]:
+    """校正 AI 翻译的标签：查无此词 → 前缀逐级缩短 → 相似度挑最接近的真实标签。
+
+    校正失败（相似度过低/目录也查不到）就保留原词，由后续查询层如实空手。
+    相似度阈值 0.55：sultans_game→sultan's_game≈0.97 必中；
+    father→other 之类完全不像的词不会被硬凑。
+    """
+    import difflib
+
+    out: list[str] = []
+    for t in tags:
+        idx = await _tbib_tag_index(t)
+        if any(n == t for n, _c in idx):
+            out.append(t)
+            continue
+        prefix = t
+        best, best_ratio = None, 0.0
+        # 全层级扫描到底取全局最优——不能在中间层提前收手：
+        # sultans_game 在 "sultans" 层会撞上相似度刚过线的 sultanshade，
+        # 而正确答案 sultan's_game 在再短一层 "sultan" 的候选里。
+        while len(prefix) >= 4:
+            for n, _c in await _tbib_tag_index(prefix):
+                r = difflib.SequenceMatcher(None, t, n).ratio()
+                if r > best_ratio:
+                    best, best_ratio = n, r
+            prefix = prefix[:-1]
+        out.append(best if best is not None and best_ratio >= 0.55 else t)
+    return out
 
 
 # —— 多图源：寂寞随机图 API（国内可达，图库杂、题材类型更广） ——

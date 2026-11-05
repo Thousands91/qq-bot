@@ -103,6 +103,7 @@ def _save_memory(uid: int, entries: list) -> None:
 # get_plaintext() 只取纯文本，QQ 小表情/商城表情整段被丢，
 # 对方只发一个表情 = 发了空消息，只能吃"我在"兜底。
 # 这里把表情段转成 [表情:xx] 文字标记，让模型知道对方"做了什么表情"。
+# QFace 表情 ID 名称对照表（部分，仅作离线兜底）。主数据源见下方动态层。
 _FACE_NAMES = {
     0: "惊讶", 1: "撇嘴", 2: "花痴", 3: "发呆", 4: "得意", 5: "流泪",
     6: "害羞", 7: "闭嘴", 8: "睡", 9: "大哭", 10: "尴尬", 11: "发怒",
@@ -126,6 +127,124 @@ _FACE_NAMES = {
     178: "无敌", 179: "吃瓜", 180: "加油", 181: "冲鸭", 182: "稳住",
 }
 
+# ---------- 表情名动态层（通用解，不再手动维护） ----------
+# 数据源：QFace 社区库（Koishi 团队维护），由 NapCat 容器直接从 QQ 服务端
+# 同步全量表情定义（537+ 个，含新表情），QQ 官方加表情 → 该库跟随更新
+# → 机器人自动获得，无需改代码。
+# 三级兜底：远程全量表（本地缓存 7 天）→ 缓存文件 → 上方内置表 → "表情N"。
+_QFACE_SOURCES = [
+    "https://koishi.js.org/QFace/assets/qq_emoji/_index.v2.json",
+    "https://cdn.jsdelivr.net/gh/koishijs/QFace@gh-pages/assets/qq_emoji/_index.v2.json",
+]
+_QFACE_CACHE_FILE = Path(__file__).parent.parent / "data" / "qface_index.json"
+_QFACE_REFRESH_DAYS = 7 * 86400
+_FACE_DYNAMIC: Dict[int, str] | None = None
+
+
+def _load_cached_qface() -> None:
+    """启动时先读本地缓存（同步、不抛错），让进程重启后立刻有全量表。"""
+    global _FACE_DYNAMIC
+    try:
+        if _QFACE_CACHE_FILE.exists():
+            data = _json.loads(_QFACE_CACHE_FILE.read_text(encoding="utf-8"))
+            tbl = {int(k): str(v) for k, v in (data.get("names") or {}).items()}
+            if len(tbl) >= 100:
+                _FACE_DYNAMIC = tbl
+    except Exception:
+        pass
+
+
+def _face_name(fid: int) -> str:
+    """查表情名：动态全量表 → 内置兜底表 → "表情N"。"""
+    dyn = _FACE_DYNAMIC
+    if dyn is not None and fid in dyn:
+        return dyn[fid]
+    return _FACE_NAMES.get(fid, f"表情{fid}")
+
+
+async def _qface_fetch_json(url: str):
+    """拉取 JSON。优先 aiohttp，缺失则 urllib 线程兜底；失败返回 None。"""
+    try:
+        import aiohttp as _aio
+    except ImportError:
+        import urllib.request as _ur
+
+        def _fetch():
+            with _ur.urlopen(url, timeout=20) as r:
+                return r.read()
+
+        try:
+            return _json.loads(await asyncio.to_thread(_fetch))
+        except Exception:
+            return None
+    else:
+        try:
+            async with _aio.ClientSession() as sess:
+                async with sess.get(url, timeout=_aio.ClientTimeout(total=20)) as resp:
+                    if resp.status != 200:
+                        return None
+                    return await resp.json(content_type=None)
+        except Exception:
+            return None
+
+
+async def _refresh_qface() -> None:
+    """后台拉取 QFace 全量表情名并写缓存；失败静默保留现状。"""
+    global _FACE_DYNAMIC
+    try:
+        if _QFACE_CACHE_FILE.exists() and _time.time() - _QFACE_CACHE_FILE.stat().st_mtime < _QFACE_REFRESH_DAYS:
+            return  # 缓存仍新鲜
+    except OSError:
+        pass
+    loaded_from = None
+    for url in _QFACE_SOURCES:
+        raw = await _qface_fetch_json(url)
+        if not raw:
+            continue
+        try:
+            names: Dict[int, str] = {}
+            for k, v in ((raw or {}).get("emojis") or {}).items():
+                try:
+                    fid = int(v.get("emojiId", k))
+                except (TypeError, ValueError):
+                    continue
+                desc = str(v.get("describe") or "").strip().lstrip("/").strip()
+                if desc:
+                    names[fid] = desc
+        except Exception:
+            continue
+        if len(names) >= 100:  # 防半截数据污染
+            _FACE_DYNAMIC = names
+            try:
+                _QFACE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                _QFACE_CACHE_FILE.write_text(
+                    _json.dumps({"names": {str(k): v for k, v in names.items()},
+                                 "syncedAt": (raw or {}).get("syncedAt")},
+                                ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass  # 缓存写不进也不影响本次生效
+            loaded_from = url.split("/")[2]
+            break
+    if loaded_from:
+        logger.info(f"[表情动态层] 已加载 QFace 全量表 {len(_FACE_DYNAMIC or {})} 条（来源 {loaded_from}）")
+    else:
+        logger.warning("[表情动态层] 全部源拉取失败，沿用缓存/内置兜底表")
+
+
+def _start_qface_refresh() -> None:
+    try:
+        asyncio.get_running_loop().create_task(_refresh_qface())
+    except RuntimeError:
+        pass
+
+
+_load_cached_qface()  # 先用本地缓存垫底（如有）
+from nonebot import get_driver  # noqa: E402
+
+get_driver().on_startup(_start_qface_refresh)  # 启动后异步刷新全量表
+
 
 def _extract_text(event) -> str:
     """纯文本 + 表情标记。
@@ -144,7 +263,7 @@ def _extract_text(event) -> str:
             elif t == "face":
                 fid = d.get("id")
                 try:
-                    name = _FACE_NAMES.get(int(fid), f"表情{fid}")
+                    name = _face_name(int(fid))
                 except (TypeError, ValueError):
                     name = "表情"
                 parts.append(f"[表情:{name}]")

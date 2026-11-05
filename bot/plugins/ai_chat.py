@@ -327,30 +327,39 @@ async def _vlm_caption(data: bytes) -> str | None:
     return None
 
 
-async def _mface_name(d) -> str:
-    """商城表情的名称：summary → 视觉识别（带缓存）→ "表情包"。"""
+_KICKED_MFACE: set = set()
+
+
+def _mface_lookup(d) -> str | None:
+    """查现成的名字：summary → 本地缓存；都没有返回 None。同步零耗时。"""
     s = str(d.get("summary") or "").strip()
     if s:
         return s
     if not _MFACE_LOADED:
         _load_mface_cache()
+    return _MFACE_NAMES.get(_mface_key(d))
+
+
+async def _mface_backfill(d) -> None:
+    """后台补识别：下载图 → 视觉模型 → 写缓存。全程不在消息主路径上：
+    当前这条消息只用占位，识别结果下一条消息起生效——绝不拖慢回复。"""
     key = _mface_key(d)
-    if key in _MFACE_NAMES:
-        return _MFACE_NAMES[key]
-    url = str(d.get("url") or d.get("imageurl") or "")
-    if url.startswith("http"):
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as cli:
-                r = await cli.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            if r.status_code == 200 and 100 < len(r.content) <= 5 * 1024 * 1024:
-                cap = await _vlm_caption(r.content)
-                if cap:
-                    _mface_save(key, cap)
-                    return cap
-        except Exception:
-            pass
-    return "表情包"
+    try:
+        url = str(d.get("url") or d.get("imageurl") or "")
+        if not url.startswith("http"):
+            return
+        import httpx
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as cli:
+            r = await cli.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200 and 100 < len(r.content) <= 5 * 1024 * 1024:
+            cap = await _vlm_caption(r.content)
+            if cap:
+                _mface_save(key, cap)
+                logger.info(f"[表情包识别] {key} → {cap}")
+    except Exception:
+        pass  # 失败不卡死；该表情下次出现会自动再试
+    finally:
+        _KICKED_MFACE.discard(key)
 
 
 async def _extract_text(event) -> str:
@@ -376,11 +385,17 @@ async def _extract_text(event) -> str:
                     name = "表情"
                 parts.append(f"[表情:{name}]")
             elif t == "mface":
-                try:
-                    _mname = await _mface_name(d)
-                except Exception:
-                    _mname = str(d.get("summary") or "表情包")
-                parts.append(f"[表情包:{_mname}]")
+                _mn = _mface_lookup(d)
+                if _mn is None:
+                    key = _mface_key(d)
+                    if key not in _KICKED_MFACE:  # 后台补识别，一条只起一次
+                        _KICKED_MFACE.add(key)
+                        try:
+                            asyncio.get_running_loop().create_task(_mface_backfill(d))
+                        except RuntimeError:
+                            _KICKED_MFACE.discard(key)
+                    _mn = "表情包"
+                parts.append(f"[表情包:{_mn}]")
             elif t == "at":
                 qq = d.get("qq")
                 if qq and str(qq) != "all":

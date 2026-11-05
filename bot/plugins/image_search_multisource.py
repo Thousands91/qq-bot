@@ -217,6 +217,15 @@ _TBIB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
 _ZH_TAG_MAP = {
     "男": ["1boy", "solo"], "男性": ["1boy", "solo"], "男人": ["1boy", "solo"],
     "帅哥": ["1boy", "solo"], "女": ["1girl"], "女性": ["1girl"], "美女": ["1girl"],
+    # 男性向扩展（2026-11-05 实测各标签 TBIB R18 均有货）
+    "美男": ["bishounen", "1boy"], "小哥哥": ["bishounen", "1boy"],
+    "熟男": ["muscular_male", "male_focus"], "大叔": ["ojisan", "male_focus"],
+    "叔叔": ["ojisan", "male_focus"], "爸爸": ["old_man", "male_focus"],
+    "男同": ["yaoi", "male_focus"], "耽美": ["yaoi", "male_focus"],
+    # 女性向扩展
+    "姨": ["milf", "1girl"], "阿姨": ["milf", "1girl"],
+    "熟女": ["milf", "1girl"], "御姐": ["milf", "1girl"],
+    # 注：未成年向标签（loli/shota 等）永不收录——红线
 }
 
 

@@ -261,12 +261,105 @@ from nonebot import get_driver  # noqa: E402
 get_driver().on_startup(_start_qface_refresh)  # 启动后异步刷新全量表
 
 
-def _extract_text(event) -> str:
+# ---------- 表情包（mface/图片型）识别层 ----------
+# 商城大表情：QQ 发送端随消息自带 summary（动态生成、不过时），优先用。
+# summary 缺失时兜底：下载表情图 → 免费视觉模型一句话识别 → 按表情 id
+# 永久缓存（同一表情全库只识别一次，之后零成本秒出），失败才落"表情包"。
+import base64 as _b64
+
+_MFACE_CACHE_FILE = Path(__file__).parent.parent / "data" / "mface_names.json"
+_MFACE_NAMES: Dict[str, str] = {}
+_MFACE_LOADED = False
+_VLM_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+_VLM_KEY = os.getenv("ZHIPU_API_KEY", "") or API_KEY
+_VLM_MODEL = os.getenv("VISION_MODEL", "glm-4v-flash")
+
+
+def _load_mface_cache() -> None:
+    global _MFACE_NAMES, _MFACE_LOADED
+    _MFACE_LOADED = True
+    try:
+        if _MFACE_CACHE_FILE.exists():
+            _MFACE_NAMES = {str(k): str(v) for k, v in
+                            _json.loads(_MFACE_CACHE_FILE.read_text(encoding="utf-8")).items()}
+    except Exception:
+        pass
+
+
+def _mface_key(d) -> str:
+    return f"{d.get('emoji_package_id') or '?'}_{d.get('emoji_id') or '?'}"
+
+
+def _mface_save(key: str, name: str) -> None:
+    _MFACE_NAMES[key] = name
+    try:
+        _MFACE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MFACE_CACHE_FILE.write_text(_json.dumps(_MFACE_NAMES, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass  # 缓存写不进不影响本次识别结果
+
+
+async def _vlm_caption(data: bytes) -> str | None:
+    """免费视觉模型一句话识别表情包；失败返回 None。"""
+    import httpx  # AsyncOpenAI 的依赖，venv 必有
+
+    payload = {
+        "model": _VLM_MODEL,
+        "messages": [
+            {"role": "system",
+             "content": "你是图片描述器。用不超过14个字的中文描述这张表情包/图片的核心内容与情绪，"
+                        "如「熊猫头小人鼓掌」「猫咪歪头微笑」。只输出描述本身，不要句号，不要解释。"},
+            {"role": "user",
+             "content": [{"type": "image_url",
+                          "image_url": {"url": "data:image/png;base64," + _b64.b64encode(data).decode()}}]},
+        ],
+    }
+    for _ in range(2):  # 免费档限流常见，重试一次
+        try:
+            async with httpx.AsyncClient(timeout=20) as cli:
+                r = await cli.post(_VLM_URL, json=payload,
+                                   headers={"Authorization": f"Bearer {_VLM_KEY}"})
+            if r.status_code == 200:
+                txt = str(r.json()["choices"][0]["message"]["content"]).strip()
+                return txt[:24] if txt else None
+        except Exception:
+            continue
+    return None
+
+
+async def _mface_name(d) -> str:
+    """商城表情的名称：summary → 视觉识别（带缓存）→ "表情包"。"""
+    s = str(d.get("summary") or "").strip()
+    if s:
+        return s
+    if not _MFACE_LOADED:
+        _load_mface_cache()
+    key = _mface_key(d)
+    if key in _MFACE_NAMES:
+        return _MFACE_NAMES[key]
+    url = str(d.get("url") or d.get("imageurl") or "")
+    if url.startswith("http"):
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as cli:
+                r = await cli.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200 and 100 < len(r.content) <= 5 * 1024 * 1024:
+                cap = await _vlm_caption(r.content)
+                if cap:
+                    _mface_save(key, cap)
+                    return cap
+        except Exception:
+            pass
+    return "表情包"
+
+
+async def _extract_text(event) -> str:
     """纯文本 + 表情标记。
 
     text 段原样保留；face 段转 [表情:名]；mface（商城/大表情）转
-    [表情包:summary]。其余段（image/at/record…）不展开，保持与
-    get_plaintext 相同的语义。任何一段取异常都跳过，绝不抛错。
+    [表情包:summary]，summary 缺失时走视觉识别补描述（见上）。
+    其余段（image/at/record…）不展开，保持与 get_plaintext 相同的
+    语义。任何一段取异常都跳过，绝不抛错。
     """
     parts = []
     try:
@@ -283,7 +376,11 @@ def _extract_text(event) -> str:
                     name = "表情"
                 parts.append(f"[表情:{name}]")
             elif t == "mface":
-                parts.append(f"[表情包:{d.get('summary') or '表情包'}]")
+                try:
+                    _mname = await _mface_name(d)
+                except Exception:
+                    _mname = str(d.get("summary") or "表情包")
+                parts.append(f"[表情包:{_mname}]")
             elif t == "at":
                 qq = d.get("qq")
                 if qq and str(qq) != "all":
@@ -613,7 +710,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
             )
         return
 
-    text = _extract_text(event)  # 含表情标记
+    text = await _extract_text(event)  # 含表情标记
     # 同一句话 60 秒内只回一次（防手滑连发/风控重发导致复读）
     import time as _time
     _dupkey = (getattr(event, "group_id", 0), event.user_id, text)
@@ -700,7 +797,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         # 引用的是图片等非文字内容，取不到原文也要让模型知道有引用这回事
         base = text or "（没另写字）"
         text = f"（对方引用了一条消息，但那条不是文字，取不到内容）{base}，看我怎么说。"
-    if not _extract_text(event) and not has_reply:
+    if not await _extract_text(event) and not has_reply:
         await ai_chat.finish(_with_quote(event, Message("我在。您有什么要说给我听？📖")))
 
     # 命中问候语/固定回复关键词的，交给 keyword_reply 出声，这里闭嘴（防双回复）
@@ -778,7 +875,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 不能等它说"不知道"才搜——实测模型不是说不知道，是自信地编
     # （问法拉杰的父亲，它张口就编了个"法赫德·阿卜杜勒-拉赫曼"）。
     # 判定必须用用户的原始话：text 里已经拼了记忆块和引用前缀，拿它判断会误判。
-    _ask = _extract_text(event) or text
+    _ask = await _extract_text(event) or text
     if _needs_fact(_ask) and not _is_self_inquiry(_ask):
         try:
             snippets = await asyncio.wait_for(
@@ -891,7 +988,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 长期记忆：只记用户自己的话，不记带记忆块/挑食提醒的拼装版。
     # 顺手记下自己答过的那一句——否则下一轮记忆里只有"用户问过什么"，
     # 模型会以为没答完，把上一个话题的答案硬塞进新回答里。
-    _remember(event.user_id, _extract_text(event), reply=answer)
+    _remember(event.user_id, await _extract_text(event), reply=answer)
 
     # 兜底：模型直呼 @昵称 而不写 QQ号 时，按对照表换成 @QQ号
     answer = _convert_at_names(answer, getattr(event, "group_id", 0))

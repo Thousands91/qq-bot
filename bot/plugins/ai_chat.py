@@ -1007,6 +1007,8 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
 
     # 兜底：模型直呼 @昵称 而不写 QQ号 时，按对照表换成 @QQ号
     answer = _convert_at_names(answer, getattr(event, "group_id", 0))
+    # 兜底：模型偶尔把 [表情:xx]/[表情包:xx] 输入标记当内容复读——发送前剥掉
+    answer = _re.sub(r"\[(?:表情|表情包)[^\]]{0,20}\]", "", answer).strip() or answer
     # 把模型回复里的 @数字 转成真正的艾特段
     import re as _re2
     _out = Message()

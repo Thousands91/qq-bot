@@ -1,1 +1,1 @@
-s63 RUN proot-distro login ubuntu -- bash -c "F=/root/bot/bot/plugins/image_search_multisource.py; echo ==规模==; wc -c \$F; echo ==缓存与随机==; grep -n \"cache\\|缓存\\|random\\|choice\\|shuffle\\|_CACHE\" \$F | head -25; echo ==未收录文案==; grep -n \"未曾收录\\|没有找到\\|未收录\" \$F; echo ==数据源==; grep -n \"http\" \$F | head -12"
+s64 RUN proot-distro login ubuntu -- bash -c "cat /root/bot/bot/plugins/image_search_multisource.py"

@@ -1,26 +1,29 @@
-==登录状态==
-Traceback (most recent call last):
-  File "<string>", line 3, in <module>
-  File "/usr/lib/python3.12/json/__init__.py", line 293, in load
-    return loads(fp.read(),
-           ^^^^^^^^^^^^^^^^
-==QQ进程==
-==bot进程==
-==插件清单==
-__pycache__
-ai_chat.py
-ai_chat.py.bak_1102
-ai_chat.py.bak_1103_1133
-book_find.py
-chess_game.py
-fortune.py
-games.py
-image_search.py.bak_1102
-image_search_multisource.py
-image_search_web.py
-image_see.py
-image_see.py.bak_1103_1133
-keyword_reply.py
-news.py
-song_request.py
-weather.py
+==napcat.log最后25行==
+█▄█ █ ▄▄▀▄██▀▀▀▄▀█▄▀▀▄▄█▄▄█ ▀▄█▄ ▄█
+█▀   ▀ ▄██▄▀ █▄█ ▀▄▀▀ █▄█ ▄█▄▄ ▀▀██
+█ ▄▀█▀▄▄▀▄█▄█ ▄██ ▄▀▄█ ██▄▀  ▄█ ███
+█  ▀  ▄▄▀ ██▄▀  ▀▀▄▄█▀█▄▀▀      ▄ █
+█▀█▄▄█▀▄██▀ ▄ █▀ █▀ █▄██▀▀  ██ █▄▀█
+█▀██▀▀█▄ ▄  ▄ █▀  ▄▄▄▀▀▀  ▄▀▄█▀▄▀▀█
+██▀▄▀▄ ▄ ▄▄█▄▄▀ ▀▄█▀▀█▄▄ ▄▄▀▀▄▀▄ ▄█
+█▄██▄▄▄▄█▀▄█▀ ▄█▄   ▄▄▀▄  ▄▄▄ ▄██▄█
+█ ▄▄▄▄▄ ██▄█ ██▄█ ▄   ▀█  █▄█ ▀▀███
+█ █   █ █▀▄▀██  ▀▄█ ██▄█  ▄▄▄▄█  ▄█
+█ █▄▄▄█ █ ▄ ▀▀██ █▀ ▀██ ▄▀▄ ▄▀█▄▄▀█
+█▄▄▄▄▄▄▄█▄███▄████▄█▄▄▄███▄███▄▄███
+
+二维码解码URL: https://txz.qq.com/p?k=ma88y6cfRWl7v7YEp0ZypQIzAs6q2vWJ&f=1600001615
+如果控制台二维码无法扫码，可以复制解码url到二维码生成网站生成二维码再扫码，也可以打开下方的二维码路径图片进行扫码。
+11-05 07:55:20 [[33mwarn[39m] 二维码已保存到 /root/Napcat/opt/QQ/resources/app/app_launcher/napcat/cache/qrcode.png
+1557c4666d902d6c7759fa5d988f448d3021cb1b5885f419bfa8dc33670e7029
+97cb9abc9d2e8f6660790f1ac132585b20194bccc04c95504255c9a0c8f60d61
+8d2e14c54b19d79cf01f0d56fe9f61aefd9c64eaaca53cf5843a8f78fd9448e2
+29e1fdba85230dafa2b327a87da43e22a2bedc0ad1929395fa5e39f199e7f675
+f639ceb186630d332f0d2b9fa92f5a06a7225ff7bf74e4d97d93cbb550e62b88
+f6635961ede390fb06bd96b9a294914f847770da6476dabebda9bf91531cab86
+188454df74426c69250a6b9b904948f65a57ac430cb8a4875dd388c94e632274
+903afa2fc73feb4ba4dd43f1893c3cd17e9b67005d5dc12dba2434d296aaa543
+389e0af6280366d51a6e047afc73701eed042ddf7b93d64f4f74b656b03ea916
+==致命字样==
+0
+==Xvfb孤儿==

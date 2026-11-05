@@ -1,13 +1,5 @@
-==三进程==
- 7424       01:08 /root/bot/venv/bin/python main.py
- 7432       01:08 bash /root/remote_ctl.sh
- 7727       01:03 bash /root/azar_guard.sh
-11275       00:00 bash /root/azar_guard.sh
-==PID文件==
--rw-r--r--. 1 root root 5 Nov  5 18:23 /root/.remote_pid
-==循环日志尾==
-[11-05 00:29] 心跳:循环正常,LAST=140
-[11-05 00:41] 心跳:循环正常,LAST=140
-[11-05 00:54] 心跳:循环正常,LAST=140
-[11-05 18:24] 看护：NapCat不在
-[11-05 18:24] 看护:自动拉起NapCat(24h内第2次)
+==QQ进程==
+10541       01:21 Xvfb :165 -screen 0 1280x1024x24 -nolisten tcp -auth /tmp/xvfb-run.RR9Bj9/Xauthority
+11277       01:09 /bin/sh /usr/bin/xvfb-run -a /root/Napcat/opt/QQ/qq --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --js-flags=--max-old-space-size=512
+11300       01:09 Xvfb :166 -screen 0 1280x1024x24 -nolisten tcp -auth /tmp/xvfb-run.aQVqSd/Xauthority
+码已放进相册,去QQ扫

@@ -1,10 +1,36 @@
-==QQ全家==
-6
-==bot==
-1
-==循环守护==
-2
-==容器内总数==
-27
-==Termux侧总数==
-24
+==规模==
+18568 /root/bot/bot/plugins/image_search_multisource.py
+==缓存与随机==
+11:import random
+29:    "https://www.dmoe.cc/random.php?return=json",
+57:        _roll = random.random()
+121:        alt = await fetch_random_img()
+144:    seed = random.randint(0, 999999)
+146:    await scenery.finish(Message(f"[CQ:image,file={url},cache=0]"))
+165:           f"&tags={tag_str}&pid={random.randint(0, 3)}")
+178:                random.shuffle(arr)
+347:_TAG_CACHE: dict[str, str] = {}
+366:    """中文关键词 → 图库英文标签，结果缓存。失败返回空串。"""
+367:    if query in _TAG_CACHE:
+368:        return _TAG_CACHE[query]
+389:                    data["choices"][0]["message"]["content"].strip().splitlines()[0]
+393:                    _TAG_CACHE[query] = tags
+421:                import random as _r
+423:                post = _r.choice(arr)
+455:async def fetch_random_img() -> str:
+456:    api = random.choice(RANDOM_IMG_APIS)
+==未收录文案==
+116:                    f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
+==数据源==
+13:import aiohttp
+29:    "https://www.dmoe.cc/random.php?return=json",
+145:    url = f"https://picsum.photos/seed/{seed}/1200/800.jpg"
+152:TBIB_API = "https://tbib.org/index.php"
+167:        async with aiohttp.ClientSession() as sess:
+170:                timeout=aiohttp.ClientTimeout(total=15),
+185:                    urls = [f"https://tbib.org/samples/{directory}/sample_{image}",
+186:                            f"https://tbib.org/images/{directory}/{image}"]
+190:                                u, timeout=aiohttp.ClientTimeout(total=25),
+219:    # 注意：booru API 的标签分隔符必须用裸 "+"——走 aiohttp params 会被
+241:JITSU_API = "https://moe.jitsu.top/img/"
+247:        async with aiohttp.ClientSession() as sess:

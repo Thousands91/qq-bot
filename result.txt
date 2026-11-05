@@ -1,7 +1,13 @@
-==napcat.log修改时间==
-2026-11-05 07:55:38.873958020 +0800
-==NapCat缓存最后写入==
-total 11
-drwxr-xr-x. 2 root root 3452 2026-11-02 16:14:04.632421495 +0800 .
-drwxr-xr-x. 9 root root 3452 2026-10-26 10:26:01.459696491 +0800 ..
--rw-r--r--. 1 root root  597 2026-11-05 07:55:20.921958027 +0800 qrcode.png
+==三进程==
+ 7424       01:08 /root/bot/venv/bin/python main.py
+ 7432       01:08 bash /root/remote_ctl.sh
+ 7727       01:03 bash /root/azar_guard.sh
+11275       00:00 bash /root/azar_guard.sh
+==PID文件==
+-rw-r--r--. 1 root root 5 Nov  5 18:23 /root/.remote_pid
+==循环日志尾==
+[11-05 00:29] 心跳:循环正常,LAST=140
+[11-05 00:41] 心跳:循环正常,LAST=140
+[11-05 00:54] 心跳:循环正常,LAST=140
+[11-05 18:24] 看护：NapCat不在
+[11-05 18:24] 看护:自动拉起NapCat(24h内第2次)

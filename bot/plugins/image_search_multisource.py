@@ -228,14 +228,20 @@ _ZH_TAG_MAP = {
     # 王者荣耀（2026-11-05 实测：diaochan 无后缀标签被错标污染为宝可梦内容，禁用；
     # 精确标签 diaochan_(honor_of_kings) 全库仅 1 张全年龄图，聊胜于无）
     "王者荣耀": ["honor_of_kings"], "貂蝉": ["diaochan_(honor_of_kings)"],
+    # 苏丹的游戏（2026-11-05 实测：TBIB 25+ 张，正确标签带撇号 sultan's_game，
+    # AI 会翻成不存在的 sultans_game，必须手写映射）
+    "苏丹的游戏": ["sultan's_game"], "苏丹游戏": ["sultan's_game"],
     # 注：未成年向标签（loli/shota 等）永不收录——红线
 }
 
 
 async def _tbib_query_bytes(tag_str: str) -> bytes | None:
     """单个标签组合查 tbib。失败/无图返回 None。"""
-    url = (f"{TBIB_API}?page=dapi&s=post&q=index&json=1&limit=25"
-           f"&tags={tag_str}&pid={random.randint(0, 3)}")
+    # 大页抓取(limit=100, pid=0)：小池子标签(如仅 1 张的 diaochan_(honor_of_kings))
+    # 在旧版随机 pid 0-3 下有 75% 概率翻到空页而白跑；limit=100 一次拿全整池，
+    # 页内 shuffle 保证随机性。大池子只取前 100 张随机，变化性足够。
+    url = (f"{TBIB_API}?page=dapi&s=post&q=index&json=1&limit=100"
+           f"&tags={tag_str}&pid=0")
     try:
         async with aiohttp.ClientSession() as sess:
             async with sess.get(
@@ -266,7 +272,9 @@ async def _tbib_query_bytes(tag_str: str) -> bytes | None:
                                 if r2.status == 200:
                                     data = await r2.read()
                                     # QQ 发图 10MB 会拖死：超大图直接换下一张
-                                    if 2048 < len(data) <= 5 * 1024 * 1024:
+                                    # (2026-11-05: 5MB 线误杀 diaochan_(honor_of_kings)
+                                    #  唯一一张图 5.1MB——放宽到 8MB,留足余量)
+                                    if 2048 < len(data) <= 8 * 1024 * 1024:
                                         return data
                         except Exception:
                             continue
@@ -301,6 +309,15 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
             if t.startswith("rating:"):
                 continue
             data = await _tbib_query_bytes(f"rating:explicit+{t}")
+            if data:
+                return data
+        # 最后兜底：不带分级限制再试一轮。库内个别帖没有 rating 标注
+        # （如 diaochan_(honor_of_kings) 唯一一张图），会被 explicit 过滤
+        # 整体漏掉——手写映射来的精确标签，有图总比空手强。
+        for t in tags:
+            if t.startswith("rating:"):
+                continue
+            data = await _tbib_query_bytes(t)
             if data:
                 return data
         return None

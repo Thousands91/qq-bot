@@ -225,6 +225,9 @@ _ZH_TAG_MAP = {
     # 女性向扩展
     "姨": ["milf", "1girl"], "阿姨": ["milf", "1girl"],
     "熟女": ["milf", "1girl"], "御姐": ["milf", "1girl"],
+    # 王者荣耀（2026-11-05 实测：diaochan 无后缀标签被错标污染为宝可梦内容，禁用；
+    # 精确标签 diaochan_(honor_of_kings) 全库仅 1 张全年龄图，聊胜于无）
+    "王者荣耀": ["honor_of_kings"], "貂蝉": ["diaochan_(honor_of_kings)"],
     # 注：未成年向标签（loli/shota 等）永不收录——红线
 }
 

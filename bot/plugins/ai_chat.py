@@ -396,6 +396,11 @@ async def _extract_text(event) -> str:
                             _KICKED_MFACE.discard(key)
                     _mn = "表情包"
                 parts.append(f"[表情包:{_mn}]")
+            elif t == "dice":
+                parts.append(f"[骰子:掷出{d.get('result', '?')}点]")
+            elif t == "rps":
+                _rps = {"1": "石头", "2": "剪刀", "3": "布"}.get(str(d.get("result", "")), "猜拳")
+                parts.append(f"[猜拳:出{_rps}]")
             elif t == "at":
                 qq = d.get("qq")
                 if qq and str(qq) != "all":
@@ -508,6 +513,11 @@ SYSTEM_PROMPT = AZAR_PERSONA + GROUP_HINT + (
     "这不是你没读过的东西——答不上来只会显得你这个书商当得虚。\n"
     "纠正的时候别端着先生架子损人，一句「不全是」「没那么一说」就够了，"
     "接下去说你那版；也别在纠正的开头先附和一句「您说得对」。\n"
+    "\n## 表情输入的规矩（务必遵守）\n"
+    "消息里的 [表情:xx]、[表情包:xx] 是系统给你看的**描述**，让你知道对方做了什么。\n"
+    "**绝不许把这些标记复述出来**——你的回复里出现 [表情:、[表情包: 都算失手，"
+    "也绝不要只在回复里打 emoji 来凑数。正确做法：**用话接住表情的情绪**"
+    "（对方捂脸就打趣他、对方惊讶就顺势卖个关子），像当面看见对方的神态那样回应。\n"
 )
 
 # ============ 吃 / 喝：模型容易把"吃什么"答成菜单，这里兜一层 ============
@@ -1429,9 +1439,9 @@ async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     from openai import AsyncOpenAI
 
     # 模型降级链：主力 glm-4.7-flash（对话质量远胜 4-flash：会主动改称呼、
-    # 接住表情梗、不出戏），免费档限流(429)激进——主模型只给 1 次机会
-    # （快速失败），撞限流立刻降级 glm-4-flash 保底（弱但稳，2 次重试）。
-    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=1)
+    # 接住表情梗、不出戏），免费档限流(429)激进——给主模型 2 次重试扛突发
+    # 限流（2026-11-05 实测单次必撞），仍失败立刻降级 glm-4-flash 保底。
+    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=2)
     client_fb = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=2)
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     if extra_system:

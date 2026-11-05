@@ -1,1 +1,1 @@
-s56 RUN proot-distro login ubuntu -- bash -c "echo ==登录状态==; bash /root/logincheck.sh 2>&1 | head -5; echo ==QQ进程==; ps -eo pid,etime,args | grep -v grep | grep xvfb | head -2; echo ==bot进程==; ps -eo pid,args | grep -v grep | grep main.py | head -2; echo ==插件清单==; ls /root/bot/bot/plugins/ | head -20"
+s57 RUN proot-distro login ubuntu -- bash -c "echo ==napcat.log最后25行==; tail -25 /root/napcat.log; echo ==致命字样==; grep -cE \"FATAL|error_code|Bye|killed|Killed\" /root/napcat.log; echo ==Xvfb孤儿==; ps -eo pid,etime,args | grep -v grep | grep Xvfb | head -5"

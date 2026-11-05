@@ -1426,21 +1426,35 @@ async def _group_roster(bot: Bot, group_id: int) -> str:
 async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     from openai import AsyncOpenAI
 
-    # glm-4.7-flash 及以上默认开深度思考，正文会被思考过程吃空——显式关闭。
-    # 免费档限流较激进，SDK 层加 3 次指数退避重试。
-    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=3)
+    # 模型降级链：主力 glm-4.7-flash（对话质量远胜 4-flash：会主动改称呼、
+    # 接住表情梗、不出戏），免费档限流(429)激进——主模型只给 1 次机会
+    # （快速失败），撞限流立刻降级 glm-4-flash 保底（弱但稳，2 次重试）。
+    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=1)
+    client_fb = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL, max_retries=2)
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     if extra_system:
         # 内部备忘放在末尾的 system 层，模型只参考不复述
         full_messages.append({"role": "system", "content": extra_system})
 
-    resp = await client.chat.completions.create(
-        model=MODEL,
-        messages=full_messages,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
-        extra_body={"thinking": {"type": "disabled"}},
-    )
+    _chain = list(dict.fromkeys([MODEL, "glm-4-flash"]))
+    resp = None
+    last_err: Exception | None = None
+    for _mdl in _chain:
+        _cli = client if _mdl == MODEL else client_fb
+        try:
+            resp = await _cli.chat.completions.create(
+                model=_mdl,
+                messages=full_messages,
+                max_tokens=MAX_TOKENS,
+                temperature=TEMPERATURE,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            logger.warning(f"[模型降级] {_mdl} 调用失败({type(e).__name__})，尝试下一个")
+    if resp is None:
+        raise last_err if last_err else RuntimeError("模型链全部失败")
     text = (resp.choices[0].message.content or "").strip()
     if not text:
         # 思考模式万一没关干净会导致空正文——抛错交给上层重试机制

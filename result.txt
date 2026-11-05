@@ -1,3 +1,26 @@
-脚本已写入
-码已放进相册,去QQ扫
-==结束==
+==登录状态==
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+  File "/usr/lib/python3.12/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+==QQ进程==
+==bot进程==
+==插件清单==
+__pycache__
+ai_chat.py
+ai_chat.py.bak_1102
+ai_chat.py.bak_1103_1133
+book_find.py
+chess_game.py
+fortune.py
+games.py
+image_search.py.bak_1102
+image_search_multisource.py
+image_search_web.py
+image_see.py
+image_see.py.bak_1103_1133
+keyword_reply.py
+news.py
+song_request.py
+weather.py

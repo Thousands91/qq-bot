@@ -428,6 +428,12 @@ _TRANSLATE_PROMPT = (
     "常见对照：原神→genshin_impact；雷电将军→raiden_shogun；"
     "甘雨→ganyu；胡桃→hu_tao；初音未来→hatsune_miku；"
     "芙宁娜→furina；纳西妲→nahida；钟离→zhongli\n"
+    "4. 泛指人物词（不是具体某人）→ 翻成性别+年龄+体格等属性标签组合，"
+    "用图库真实存在的属性词，禁止亲属称谓直译（father/dad/mother/aunt "
+    "这类词图库里无人用作标签）：\n"
+    "   爸爸/大叔/熟男 → old_man 或 ojisan, male_focus；"
+    "美男/帅哥 → bishounen 或 1boy, male_focus；"
+    "姨/熟女/御姐 → milf, 1girl；肌肉男 → muscular_male, male_focus\n"
     "示例：苏丹的游戏 阿萨尔 → sultan's_game, azar_(sultan's_game)"
 )
 

@@ -156,6 +156,8 @@ def _load_cached_qface() -> None:
 
 def _face_name(fid: int) -> str:
     """查表情名：动态全量表 → 内置兜底表 → "表情N"。"""
+    if _FACE_DYNAMIC is None:
+        _kick_refresh_once()
     dyn = _FACE_DYNAMIC
     if dyn is not None and fid in dyn:
         return dyn[fid]
@@ -233,11 +235,24 @@ async def _refresh_qface() -> None:
         logger.warning("[表情动态层] 全部源拉取失败，沿用缓存/内置兜底表")
 
 
-def _start_qface_refresh() -> None:
+async def _start_qface_refresh() -> None:
+    """startup 协程回调（NoneBot 把同步回调丢进线程池，get_running_loop 会炸，必须 async）。"""
+    asyncio.get_running_loop().create_task(_refresh_qface())
+
+
+_REFRESH_KICKED = False
+
+
+def _kick_refresh_once() -> None:
+    """保险：万一 startup 没拉成，第一条带表情的消息时再补拉一次。"""
+    global _REFRESH_KICKED
+    if _REFRESH_KICKED or _FACE_DYNAMIC is not None:
+        return
+    _REFRESH_KICKED = True
     try:
         asyncio.get_running_loop().create_task(_refresh_qface())
     except RuntimeError:
-        pass
+        _REFRESH_KICKED = False
 
 
 _load_cached_qface()  # 先用本地缓存垫底（如有）

@@ -104,14 +104,16 @@ def _readable(bg, color, target):
     return _mix(color, _INK, 0.9)
 
 
-def _render_card(sign, card, tier, scores, avg, user, date_str):
-    """把这一签画成一张卡牌图，返回 png 字节；任何一步失败返回 None。"""
+def _render_card(sign, card, tier, scores, avg, user, date_str, advice=None):
+    """把这一签画成一张卡牌图，返回 png 字节；任何一步失败返回 None。
+    advice（可选）：{"top_label","top_adv","low_dim","low_adv","yi","ji","deadline"}
+    —— 传入时在五维下方补画建议区（坑54：只回图后，文字签独有的实用信息必须搬进卡面）。"""
     try:
         from PIL import Image, ImageDraw, ImageFont
         font_path = next((p for p in _CARD_FONT_CANDIDATES if Path(p).exists()), None)
         if not font_path:
             return None
-        W, H = 720, 1080
+        W, H = 720, 1240
         tc = _TIER_RGB[tier["name"]]
         tc_deep = _mix(tc, (30, 24, 16), 0.35)       # 边框/进度条用（比底色深才看得见）
         tc_text = _mix(tc, (30, 24, 16), 0.45)       # 品级色文字用
@@ -166,6 +168,34 @@ def _render_card(sign, card, tier, scores, avg, user, date_str):
             d.rounded_rectangle([bar_x, y + 4, bar_x + max(fill_w, 14), y + 26], radius=8, fill=tc_deep)
             d.text((bar_x + bar_w + 18, y), str(v), font=f_dim, fill=_readable(bg, (62, 54, 46), 4.5))
             y += 46
+        # 建议区（所长/所短 + 宜/忌 + 期限）：原文字签的实用信息，坑54 后只回图必须画进卡面
+        if advice:
+            y = max(y + 6, 900)
+            d.line([70, y, W - 70, y], fill=_mix(bg, (40, 30, 20), 0.35), width=2)
+            y += 22
+            def _fit(text, base, maxw):
+                """超宽自动缩字号（最小 20），长建议也不许超出卡边。"""
+                size = base
+                while size > 20:
+                    f_try = ImageFont.truetype(font_path, size)
+                    if 70 + d.textlength(text, font=f_try) <= maxw:
+                        break
+                    size -= 1
+                return ImageFont.truetype(font_path, size)
+            line1 = f"{advice['top_label']}　{advice['top_dim']} · {advice['top_adv']}"
+            line2 = f"所短　{advice['low_dim']} · {advice['low_adv']}"
+            f_dim2 = ImageFont.truetype(font_path, 25)
+            d.text((70, y), line1, font=_fit(line1, 26, W - 140), fill=_readable(bg, (62, 54, 46), 4.0))
+            y += 40
+            d.text((70, y), line2, font=_fit(line2, 26, W - 140), fill=_readable(bg, (62, 54, 46), 4.0))
+            y += 44
+            d.line([70, y, W - 70, y], fill=_mix(bg, (40, 30, 20), 0.35), width=2)
+            y += 20
+            d.text((70, y), f"宜　{advice['yi']}", font=f_dim, fill=_readable(bg, (62, 54, 46), 4.0))
+            y += 42
+            d.text((70, y), f"忌　{advice['ji']}", font=f_dim, fill=_readable(bg, (62, 54, 46), 4.0))
+            y += 40
+            d.text((70, y), advice['deadline'], font=f_dim2, fill=_readable(bg, (105, 96, 84), 3.0))
         # 底部：人 + 日期
         foot = f"{user}　{date_str}"
         d.text(((W - d.textlength(foot, font=f_small)) / 2, H - 96), foot, font=f_small, fill=c_muted)
@@ -465,11 +495,15 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
     )
 
     _log_draw(event.user_id, sign)
-    card_png = _render_card(sign, card, tier, scores, avg, user, today.strftime('%m月%d日'))
+    card_png = _render_card(sign, card, tier, scores, avg, user, today.strftime('%m月%d日'), advice={
+        "top_label": top_label, "top_dim": top_dim, "top_adv": top_adv,
+        "low_dim": low_dim, "low_adv": low_adv,
+        "yi": yi, "ji": ji, "deadline": deadline,
+    })
     if card_png:
-        # 卡牌图在上，文字签全文在下（图收藏，字细读）
-        await fortune.finish(Message([
+        # 坑54（用户定稿 2026-11-07）：只回图不回长文，实用信息（建议/宜忌/期限）已画进卡面；
+        # 渲染失败仍退回文字签全文，绝不因为画图挂掉而吞签
+        await fortune.finish(Message(
             MessageSegment.image("base64://" + _b64.b64encode(card_png).decode()),
-            MessageSegment.text("\n" + msg),
-        ]))
+        ))
     await fortune.finish(Message(msg))

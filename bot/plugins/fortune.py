@@ -13,12 +13,167 @@
 """
 import random
 import datetime
+import json as _json
+import io as _io
+import base64 as _b64
+from pathlib import Path
 
 from nonebot import on_command
 from nonebot.rule import to_me
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent, Message, MessageSegment
 
 fortune = on_command("抽签", aliases={"运势", "翻书", "折卡"}, rule=to_me(), priority=20, block=True)
+
+# ============ 抽签记账：给「你还记得我吗」的小传提供素材 ============
+# 同一人当天签是固定的（种子里有日期），所以只在跨天时记一条，绝不刷屏。
+FORTUNE_LOG = Path(__file__).resolve().parent.parent / "data" / "fortune_log.json"
+
+
+def _log_draw(uid: int, sign: dict) -> None:
+    try:
+        data = {}
+        if FORTUNE_LOG.exists():
+            data = _json.loads(FORTUNE_LOG.read_text(encoding="utf-8"))
+        arr = data.setdefault(str(uid), [])
+        today = datetime.date.today().isoformat()
+        if not arr or arr[-1].get("d") != today:
+            arr.append({"d": today, "key": sign["key"], "name": sign["name"]})
+            data[str(uid)] = arr[-200:]  # 防膨胀：只留最近200天
+            FORTUNE_LOG.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass  # 记账失败不影响抽签
+
+
+# ============ 签卡成像：抽到一张"看得见"的苏丹卡牌 ============
+# 本地 Pillow 画，不依赖任何生图接口；字体缺失/画崩时返回 None，退回纯文字签。
+_CARD_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+]
+# 品级配色 = 官方wiki卡面阴影层实测主色（patchwiki.biligame.com 素材直接取色，2026-11-07）
+# 金(188,172,88) 银(148,172,200偏蓝) 铜(156,180,132偏绿锈) 石(152,134,122暖石灰)
+_TIER_RGB = {"金": (188, 172, 88), "银": (148, 172, 200), "铜": (156, 180, 132), "石": (152, 134, 122)}
+_KEY_RGB = {"大吉": (168, 108, 10), "吉": (128, 100, 22), "小吉": (108, 92, 44),
+            "平": (108, 108, 100), "小凶": (64, 96, 140), "凶": (172, 36, 20), "未定": (118, 110, 98)}
+
+
+def _wrap_cn(draw, text, font, maxw):
+    lines, cur = [], ""
+    for ch in str(text):
+        if cur and draw.textlength(cur + ch, font=font) > maxw:
+            lines.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _mix(c1, c2, t):
+    """颜色 c1 向 c2 混合 t（0=全c1，1=全c2）。"""
+    return tuple(round(a + (b - a) * t) for a, b in zip(c1, c2))
+
+
+def _contrast(a, b):
+    """WCAG 相对亮度对比度（>=4.5 正文清晰，>=3.0 大字/次要文字可辨认）。"""
+    def _lum(c):
+        def f(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, bl = map(f, c)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * bl
+    l1, l2 = sorted([_lum(a), _lum(b)], reverse=True)
+    return (l1 + 0.05) / (l2 + 0.05)
+
+
+_INK = (30, 24, 16)
+
+
+def _readable(bg, color, target):
+    """文字色向深墨逐步加深，直到它与卡面底色 bg 的对比度达到 target。
+    坑51b：固定灰 (140,128,110) 在石卡底色上对比度只有 1.11，文字直接隐身；
+    任何文字色必须按底色自适应加深，不许写死。"""
+    t = 0.0
+    while t < 0.9:
+        c = _mix(color, _INK, t)
+        if _contrast(c, bg) >= target:
+            return c
+        t += 0.05
+    return _mix(color, _INK, 0.9)
+
+
+def _render_card(sign, card, tier, scores, avg, user, date_str):
+    """把这一签画成一张卡牌图，返回 png 字节；任何一步失败返回 None。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        font_path = next((p for p in _CARD_FONT_CANDIDATES if Path(p).exists()), None)
+        if not font_path:
+            return None
+        W, H = 720, 1080
+        tc = _TIER_RGB[tier["name"]]
+        tc_deep = _mix(tc, (30, 24, 16), 0.35)       # 边框/进度条用（比底色深才看得见）
+        tc_text = _mix(tc, (30, 24, 16), 0.45)       # 品级色文字用
+        kc = _KEY_RGB.get(sign["key"], (110, 102, 88))
+        # 卡面底色 = 官方品级阴影层实测色
+        bg = tc
+        img = Image.new("RGB", (W, H), bg)
+        d = ImageDraw.Draw(img)
+        # 双层边框：外粗内细
+        d.rectangle([8, 8, W - 9, H - 9], outline=tc_deep, width=5)
+        d.rectangle([20, 20, W - 21, H - 21], outline=tc_text, width=2)
+        f_small = ImageFont.truetype(font_path, 26)
+        f_key = ImageFont.truetype(font_path, 58)
+        f_name = ImageFont.truetype(font_path, 96)
+        f_body = ImageFont.truetype(font_path, 31)
+        f_dim = ImageFont.truetype(font_path, 27)
+        # 顶部戳记（次要信息：对比度 ≥3.0 即可，但必须达标）
+        stamp = "阿萨尔书店 · 命书"
+        c_muted = _readable(bg, (140, 128, 110), 3.0)
+        d.text(((W - d.textlength(stamp, font=f_small)) / 2, 52), stamp, font=f_small, fill=c_muted)
+        # 吉凶 + 卡名
+        d.text(((W - d.textlength(sign["key"], font=f_key)) / 2, 108), sign["key"], font=f_key,
+               fill=_readable(bg, kc, 3.5))
+        name = f"「{sign['name']}」"
+        d.text(((W - d.textlength(name, font=f_name)) / 2, 190), name, font=f_name,
+               fill=_readable(bg, (50, 43, 36), 4.5))
+        # 品级行
+        tierline = f"{tier['name']}品 · {sign['card']}卡 · 应在{card['realm']}　签力 {int(avg)}"
+        d.text(((W - d.textlength(tierline, font=f_small)) / 2, 318), tierline, font=f_small,
+               fill=_readable(bg, tc_text, 3.5))
+        d.line([70, 372, W - 70, 372], fill=_mix(bg, (40, 30, 20), 0.35), width=2)
+        # 签诗（自动折行，居中）
+        y = 400
+        for ln in _wrap_cn(d, sign["line"], f_body, W - 160):
+            d.text(((W - d.textlength(ln, font=f_body)) / 2, y), ln, font=f_body,
+                   fill=_readable(bg, (62, 54, 46), 4.5))
+            y += 44
+        y += 8
+        for ln in _wrap_cn(d, sign["note"], f_body, W - 160):
+            d.text(((W - d.textlength(ln, font=f_body)) / 2, y), ln, font=f_body,
+                   fill=_readable(bg, (105, 96, 84), 4.0))
+            y += 44
+        # 五维条
+        y = max(y + 28, 620)
+        d.text((70, y - 6), "五维", font=f_dim, fill=c_muted)
+        y += 44
+        bar_x, bar_w = 210, 330
+        for dim, v in scores.items():
+            d.text((70, y), dim, font=f_dim, fill=_readable(bg, (85, 76, 66), 4.0))
+            d.rounded_rectangle([bar_x, y + 4, bar_x + bar_w, y + 26], radius=8, fill=_mix(bg, (30, 24, 16), 0.22))
+            fill_w = int(bar_w * (v - 20) / 80)
+            d.rounded_rectangle([bar_x, y + 4, bar_x + max(fill_w, 14), y + 26], radius=8, fill=tc_deep)
+            d.text((bar_x + bar_w + 18, y), str(v), font=f_dim, fill=_readable(bg, (62, 54, 46), 4.5))
+            y += 46
+        # 底部：人 + 日期
+        foot = f"{user}　{date_str}"
+        d.text(((W - d.textlength(foot, font=f_small)) / 2, H - 96), foot, font=f_small, fill=c_muted)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
 
 # ============ 四类卡：决定运势"应在何处" ============
 CARD_TYPES = {
@@ -309,4 +464,12 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent):
         f"忌　{ji}"
     )
 
+    _log_draw(event.user_id, sign)
+    card_png = _render_card(sign, card, tier, scores, avg, user, today.strftime('%m月%d日'))
+    if card_png:
+        # 卡牌图在上，文字签全文在下（图收藏，字细读）
+        await fortune.finish(Message([
+            MessageSegment.image("base64://" + _b64.b64encode(card_png).decode()),
+            MessageSegment.text("\n" + msg),
+        ]))
     await fortune.finish(Message(msg))

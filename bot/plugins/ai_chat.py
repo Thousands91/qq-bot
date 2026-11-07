@@ -362,7 +362,115 @@ async def _mface_backfill(d) -> None:
         _KICKED_MFACE.discard(key)
 
 
-async def _extract_text(event) -> str:
+# ---------- 语音转文字（2026-11-07 新增：给阿萨尔装"耳朵"） ----------
+# 硅基流动 SenseVoiceSmall（免费档）优先；未配置/失败时智谱 glm-asr 兜底（同 key，付费）。
+# 结果按 file_id 永久缓存（转写结果不随时间变化，同一条语音绝不二次计费）。
+SF_ASR_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+SF_ASR_URL = "https://api.siliconflow.cn/v1/audio/transcriptions"
+SF_ASR_MODEL = os.getenv("SILICONFLOW_ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
+ZHIPU_ASR_MODEL = os.getenv("ZHIPU_ASR_MODEL", "glm-asr-2512")
+_VOICE_CACHE: Dict[str, str] = {}
+_VOICE_KICKED = set()
+
+
+async def _download_bytes(url: str, limit: int = 20 * 1024 * 1024) -> bytes | None:
+    """下载音频字节。优先 aiohttp，缺库/失败走 urllib 线程兜底；失败返回 None。"""
+    try:
+        import aiohttp as _aio
+        async with _aio.ClientSession() as sess:
+            async with sess.get(url, timeout=_aio.ClientTimeout(total=25)) as resp:
+                if resp.status == 200:
+                    b = await resp.read()
+                    return b if 0 < len(b) < limit else None
+    except Exception:
+        pass
+    try:
+        import urllib.request as _ur
+
+        def _dl():
+            req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            return _ur.urlopen(req, timeout=25).read()
+
+        raw = await asyncio.to_thread(_dl)
+        return raw if 0 < len(raw) < limit else None
+    except Exception:
+        return None
+
+
+async def _asr_request(key: str, url: str, model: str, data: bytes, fname: str) -> str:
+    """multipart 调转写接口，返回文本或空串，绝不抛错。"""
+    if not key or not data:
+        return ""
+    try:
+        import aiohttp as _aio
+        form = _aio.FormData()
+        form.add_field("model", model)
+        form.add_field("file", data, filename=fname, content_type="audio/mpeg")
+        headers = {"Authorization": f"Bearer {key}"}
+        async with _aio.ClientSession() as sess:
+            async with sess.post(url, data=form, headers=headers,
+                                 timeout=_aio.ClientTimeout(total=30)) as resp:
+                j = await resp.json(content_type=None)
+        if isinstance(j, dict):
+            t = str(j.get("text") or "").strip()
+            if t:
+                return t
+            logger.warning(f"[语音]转写失败: {str(j)[:150]}")
+    except Exception as e:
+        logger.warning(f"[语音]转写异常: {type(e).__name__} {e}")
+    return ""
+
+
+async def _voice_to_text(d: dict, bot=None) -> str:
+    """语音段 -> 文本。拿音频两路：段里自带 url 直下；否则 OneBot get_record 转 mp3。
+    失败返回空串（上层给"[语音:没听清]"标记），绝不抛错拖死回复。"""
+    fid = str(d.get("file") or d.get("file_id") or "")
+    if not fid or fid in _VOICE_KICKED:
+        return ""
+    if fid in _VOICE_CACHE:
+        return _VOICE_CACHE[fid]
+    _VOICE_KICKED.add(fid)
+    try:
+        data = None
+        url = d.get("url")
+        if url:
+            data = await _download_bytes(str(url))
+        if data is None and bot is not None:
+            try:
+                r = await bot.call_api("get_record", file=fid, out_format="mp3")
+                f = (r or {}).get("file") if isinstance(r, dict) else None
+                if f:
+                    fs = str(f)
+                    if len(fs) > 200:  # base64 内容
+                        data = _b64.b64decode(fs)
+                    elif fs.startswith("http"):
+                        data = await _download_bytes(fs)
+                    elif fs.startswith("/"):
+                        p = Path(fs)
+                        if p.is_file() and p.stat().st_size < 20 * 1024 * 1024:
+                            data = p.read_bytes()
+            except Exception:
+                pass
+        if not data:
+            logger.warning("[语音]拿音频失败(无url且get_record失败)")
+            return ""
+        text = await _asr_request(SF_ASR_KEY, SF_ASR_URL, SF_ASR_MODEL, data, "voice.mp3")
+        if not text:
+            text = await _asr_request(API_KEY, BASE_URL + "/audio/transcriptions",
+                                      ZHIPU_ASR_MODEL, data, "voice.mp3")
+        if text:
+            _VOICE_CACHE[fid] = text
+            if len(_VOICE_CACHE) > 500:  # 防膨胀：最旧的先丢
+                for k in list(_VOICE_CACHE)[:100]:
+                    _VOICE_CACHE.pop(k, None)
+        return text
+    except Exception:
+        return ""
+    finally:
+        _VOICE_KICKED.discard(fid)
+
+
+async def _extract_text(event, bot=None) -> str:
     """纯文本 + 表情标记。
 
     text 段原样保留；face 段转 [表情:名]；mface（商城/大表情）转
@@ -407,9 +515,71 @@ async def _extract_text(event) -> str:
                     parts.append(f"[@{qq}]")
                 elif str(qq) == "all":
                     parts.append("[@全体成员]")
+            elif t == "record":
+                # 语音：转写成功当正文用；失败给标记让模型用话接住（"声音糊了"）
+                vtxt = await _voice_to_text(d, bot)
+                parts.append(vtxt if vtxt else "[语音:没听清]")
     except Exception:
         return event.get_plaintext().strip()
     return "".join(parts).strip()
+
+
+async def _memory_biography(uid: int) -> str:
+    """「你还记得我吗」→ 翻记忆和抽签账本，写一段关于这个人的小传。
+
+    素材全来自真实记录（记忆条目 + fortune_log），铁律：不许编造记录里没有的事。
+    LLM 挂了退规则版拼装，两头都不许空手。
+    """
+    entries = _load_memory(uid)
+    draws = []
+    try:
+        flog = _json.loads((MEMORY_DIR.parent / "fortune_log.json").read_text(encoding="utf-8"))
+        draws = flog.get(str(uid), [])[-5:]
+    except Exception:
+        pass
+    if not entries and not draws:
+        return random.choice([
+            "（他翻了一阵账本）您的名字还没上我这儿的簿子。今儿头一回来？坐，聊聊，兴许明天我就记得您了。",
+            "（他把账本摊开又合上）簿上还没有您。头一面的客人我都记得牢——可惜您还不是。",
+        ])
+    n = len(entries)
+    topics = [e.get("m", "") for e in entries[-8:] if e.get("m")]
+    first_day = ""
+    if entries:
+        try:
+            first_day = _time.strftime("%m月%d日", _time.localtime(min(e.get("t", 0) for e in entries)))
+        except Exception:
+            first_day = ""
+    draw_line = ""
+    if draws:
+        draw_line = "抽过的签：" + "、".join(f"{d.get('name')}({d.get('key')})" for d in draws)
+    material = (
+        f"记录条数：{n} 条" + (f"，最早一条记于 {first_day}" if first_day else "") + "\n"
+        + ("最近打交道的内容：\n" + "\n".join(f"- {t[:60]}" for t in topics) + "\n" if topics else "")
+        + (draw_line + "\n" if draw_line else "")
+    )
+    try:
+        out = await call_llm(
+            [{"role": "user",
+              "content": "客人问我「你还记得我吗」。以下是店里簿子上关于他的全部记录，"
+                         "用三五句话写一段「关于这位客人」的小传回答他：他是个什么来头的人、"
+                         "你们之间打过什么交道、抽过什么签。只用记录里有的事，一个字都不许编。"
+                         "末尾用一句书商口吻的话收（比如'您的账还记在我这儿'之类，自拟）。\n\n" + material}],
+            extra_system="（这是「小传」场景：回答里可以提'簿子/账本/我记着'这类书店意象，"
+                         "但铁律照旧——不编造、不模板腔、不挂emoji结尾。）",
+        )
+        if out and out.strip():
+            return out.strip()
+    except Exception as e:
+        logger.warning(f"小传LLM失败: {type(e).__name__} {e}")
+    # 规则兜底：拼不出花样也得给出真实信息
+    parts = [f"（他翻了翻簿子）您这名字我记着——簿上有 {n} 条跟您打交道的记录。"]
+    if topics:
+        parts.append(f"最近一回说的是：{topics[-1][:40]}。")
+    if draws:
+        parts.append(f"上回抽的签是{draws[-1].get('name')}。")
+    parts.append("这笔账我还记着呢。")
+    return "".join(parts)
 
 
 def _remember(uid: int, text: str, reply: str = "") -> None:
@@ -514,10 +684,17 @@ SYSTEM_PROMPT = AZAR_PERSONA + GROUP_HINT + (
     "纠正的时候别端着先生架子损人，一句「不全是」「没那么一说」就够了，"
     "接下去说你那版；也别在纠正的开头先附和一句「您说得对」。\n"
     "\n## 表情输入的规矩（务必遵守）\n"
-    "消息里的 [表情:xx]、[表情包:xx] 是系统给你看的**描述**，让你知道对方做了什么。\n"
-    "**绝不许把这些标记复述出来**——你的回复里出现 [表情:、[表情包: 都算失手，"
-    "也绝不要只在回复里打 emoji 来凑数。正确做法：**用话接住表情的情绪**"
-    "（对方捂脸就打趣他、对方惊讶就顺势卖个关子），像当面看见对方的神态那样回应。\n"
+    "消息里的 [表情:名] 表示**对方刚发了一个 QQ 表情，名字就是表情画的是什么**——"
+    "这跟对方说了一句话同等重要，**你的回复必须跟这个表情搭上话**，像当面看见对方的神态。\n"
+    "三个实际例子（照这个劲头接）：\n"
+    "· 收到 [表情:菜汪] → 认出这个梗接它：「这狗怎么长成一颗菜，你俩谁随谁」\n"
+    "· 收到 [表情:无语] → 接他的情绪：「行了行了，你无语归无语，书还是得看」\n"
+    "· 收到 [表情:捂脸] → 「笑成这样，今日的账给你抹个零头」\n"
+    "**铁律**：回复的内容若跟表情完全无关（对方发表情你却在说吃吃喝喝），这一条算重大失手。\n"
+    "对方**只发表情没写字**时：像真人那样用一两句短话接住，不许长篇大论。\n"
+    "**绝不许复述标记**（回复里出现 [表情:、[表情包: 都算失手），也别拿 emoji 凑数。\n"
+    "看到 [表情包:表情包] 这种占位（系统没认出来）：坦率打趣一句「你这表情我这书里没收着」，"
+    "**绝不许自己编这表情画了什么**——编了就是把没见过的东西写进书里。\n"
 )
 
 # ============ 吃 / 喝：模型容易把"吃什么"答成菜单，这里兜一层 ============
@@ -735,7 +912,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
             )
         return
 
-    text = await _extract_text(event)  # 含表情标记
+    text = await _extract_text(event, bot)  # 含表情标记
     # 同一句话 60 秒内只回一次（防手滑连发/风控重发导致复读）
     import time as _time
     _dupkey = (getattr(event, "group_id", 0), event.user_id, text)
@@ -805,11 +982,20 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
             quoted_raw = src.get("message") or src.get("raw_message") or ""
             quoted_sender = (src.get("sender") or {}).get("user_id")
             if isinstance(quoted_raw, list):
-                quoted = "".join(
-                    s.get("data", {}).get("text", "")
-                    for s in quoted_raw
-                    if isinstance(s, dict) and s.get("type") == "text"
-                )
+                # 文字段直接拼；语音段就地转写（引用语音=把耳朵伸到被引用那条上）
+                _qparts = []
+                for s in quoted_raw:
+                    if not isinstance(s, dict):
+                        continue
+                    if s.get("type") == "text":
+                        _qparts.append(s.get("data", {}).get("text", ""))
+                    elif s.get("type") == "record":
+                        try:
+                            _vt = await _voice_to_text(s.get("data") or {}, bot)
+                        except Exception:
+                            _vt = ""
+                        _qparts.append(f"[语音:{_vt}]" if _vt else "[语音:没听清]")
+                quoted = "".join(_qparts)
             else:
                 quoted = str(quoted_raw)
             quoted = quoted.strip()
@@ -822,8 +1008,12 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         # 引用的是图片等非文字内容，取不到原文也要让模型知道有引用这回事
         base = text or "（没另写字）"
         text = f"（对方引用了一条消息，但那条不是文字，取不到内容）{base}，看我怎么说。"
-    if not await _extract_text(event) and not has_reply:
+    if not await _extract_text(event, bot) and not has_reply:
         await ai_chat.finish(_with_quote(event, Message("我在。您有什么要说给我听？📖")))
+
+    # 「你还记得我吗」→ 翻记忆写小传（真实素材，不走普通对话链，防模型现编）
+    if _re_mod.search(r"(还?记得我吗|还认识我吗|认识我吗)", text):
+        await ai_chat.finish(_with_quote(event, Message(await _memory_biography(event.user_id))))
 
     # 命中问候语/固定回复关键词的，交给 keyword_reply 出声，这里闭嘴（防双回复）
     try:
@@ -864,6 +1054,23 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     if mem_block:
         text = f"{text}\n\n{mem_block}"
     picked = pick_food_or_drink(user_text, key)
+    # 表情强提示（坑55）：识别层没问题，坏在小模型拿到 [表情:xx] 不接梗、自说自话。
+    # system 里的规矩压不住它，就在近处（本轮 user 消息末尾）直接点名——
+    # 小模型只听得见眼前的指令。表情名从消息里抠出来，一个词都不许模型猜。
+    _face_m = _re.search(r"\[(表情|表情包):([^\]]+)\]", text)
+    if _face_m:
+        _fname = _face_m.group(2)
+        if _fname == "表情包":  # 系统也没认出来的占位
+            _face_hint = (
+                f"\n\n（提醒：对方刚发了一个你认不出的表情。回复必须围绕「看见对方发了个"
+                f"你没见过的表情」来接——坦率打趣，绝不许编造它画了什么，也不许岔到别的话题。）"
+            )
+        else:
+            _face_hint = (
+                f"\n\n（提醒：对方刚发了一个表情「{_fname}」。你的回复第一句就要跟这个表情"
+                f"搭上话——认它的梗、接它的情绪都行，绝不许当没看见去聊别的。）"
+            )
+        text = f"{text}{_face_hint}"
     if picked:
         hint = f"{text}\n\n（提醒：对方是让你挑一样。这一样就定作「{picked}」，直接说它，别报菜单。）"
         to_model = list(msgs) + [{"role": "user", "content": hint}]
@@ -900,7 +1107,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 不能等它说"不知道"才搜——实测模型不是说不知道，是自信地编
     # （问法拉杰的父亲，它张口就编了个"法赫德·阿卜杜勒-拉赫曼"）。
     # 判定必须用用户的原始话：text 里已经拼了记忆块和引用前缀，拿它判断会误判。
-    _ask = await _extract_text(event) or text
+    _ask = await _extract_text(event, bot) or text
     if _needs_fact(_ask) and not _is_self_inquiry(_ask):
         try:
             snippets = await asyncio.wait_for(
@@ -1013,7 +1220,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 长期记忆：只记用户自己的话，不记带记忆块/挑食提醒的拼装版。
     # 顺手记下自己答过的那一句——否则下一轮记忆里只有"用户问过什么"，
     # 模型会以为没答完，把上一个话题的答案硬塞进新回答里。
-    _remember(event.user_id, await _extract_text(event), reply=answer)
+    _remember(event.user_id, await _extract_text(event, bot), reply=answer)
 
     # 兜底：模型直呼 @昵称 而不写 QQ号 时，按对照表换成 @QQ号
     answer = _convert_at_names(answer, getattr(event, "group_id", 0))

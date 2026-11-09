@@ -1,0 +1,9 @@
+# 排除敏感/无关文件，镜像里绝不带密钥
+bot/.env
+core.*
+__pycache__/
+*.pyc
+tests_*.py
+*.db-shm
+*.db-wal
+.git/

@@ -56,7 +56,7 @@ API_KEY = os.getenv("OPENAI_API_KEY", "")
 BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.siliconflow.cn/v1")
 MODEL = os.getenv("OPENAI_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "300"))
-CONTEXT_LEN = int(os.getenv("AI_CONTEXT_LENGTH", "6"))
+CONTEXT_LEN = int(os.getenv("AI_CONTEXT_LENGTH", "16"))
 TEMPERATURE = float(os.getenv("AI_TEMPERATURE", "0.85"))
 
 # 对话上下文（按 (群号, 用户QQ) 缓存）
@@ -710,6 +710,27 @@ _EMOJI_STYLES = (
 )
 _EMOJI_OPENERS = ("哟，", "好家伙，", "行了行了，", "嚯，", "得，", "（放下手里的书）")
 _EMOJI_RECENT: Deque[str] = deque(maxlen=6)   # 最近接表情回复的开头（防雷同）
+
+# ============ 文本防复读护栏（坑73，2026-11-09）============
+# 弱模型兜底时爱原地打转：用户换三种问法，它用近似句式回三遍（11-08晚聊天实锤）。
+# 原理同 _EMOJI_RECENT：把最近4条回复的"签名"（去标点取前60字）存着，
+# 新回复与任一条开头雷同或整体相似度过高 → 带禁令重答一次。
+_TEXT_RECENT: Dict[tuple, Deque[str]] = defaultdict(lambda: deque(maxlen=4))
+
+
+def _norm_text(s: str) -> str:
+    """回复签名：去掉所有标点空白，取前60字——句式雷同的签名必然相近。"""
+    return re.sub(r"[\s，。！？、；：…—·,.!?;:()（）\"\"''「」]+", "", s)[:60]
+
+
+def _sig_sim(a: str, b: str) -> bool:
+    """签名相似判定：前10字相同=直接判雷同；整体相似度≥0.72=判雷同。"""
+    if not a or not b:
+        return False
+    if a[:10] == b[:10]:
+        return True
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.72
 _EMOJI_LAZY_RE = re.compile(r"表情|像是在说|像是|似乎在说|仿佛在说|展示了|传达了|如同")
 _EMOJI_TAIL_RE = re.compile(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u203C\u2049\u3030\u303D\u3297\u3299\u00A9\u00AE\u2122]+\s*$")
 
@@ -955,6 +976,14 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         return
     if text:
         _DUP[_dupkey] = _now
+    # ===== 积压过滤（坑72，2026-11-09）：旧消息不回 =====
+    # NapCat 断线重连/网络恢复后会把积压的旧消息一次性吐进来，逐条作答=
+    # 拿着几分钟前的语境回话（"答非所问"元凶之一，11-08晚实锤）。
+    # 超过 2 分钟的旧消息直接跳过——迟到的热情比冷淡更伤人设。
+    _age = _now - float(getattr(event, "time", _now))
+    if _age > 120:
+        logger.info(f"[积压跳过] 消息已延迟{int(_age)}秒，不回：{text[:20]!r}")
+        return
     # ===== 闭嘴开关：两台机器人互@容易刹不住车，用户喊停就停 =====
     # 判断放在去重之后、一切应答之前；停止优先于继续（先喊停再喊继续按"停"算，
     # 因为正则互斥不会同时命中，顺序只影响都命中时的极端情况）。
@@ -1288,6 +1317,28 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 先进历史再截断的话，历史里存的是"用户没看见的那半句"，
     # 后面追问时模型会以为自己说过——所以先截断，存和发用同一份。
     answer = trim_to_sentences(answer, max_sentences=3)
+
+    # 文本防复读护栏（坑73）：与最近4条回复任一条雷同 → 带禁令重答一次。
+    # 表情回复走 _EMOJI_RECENT 自己的护栏，这里跳过，避免双重重答拖慢。
+    if answer and not _face_m:
+        _sig = _norm_text(answer)
+        if _sig and any(_sig_sim(_sig, _r) for _r in _TEXT_RECENT[key]):
+            logger.info(f"[防复读] 与近期回复雷同，重答：{answer[:24]!r}")
+            try:
+                _retry3 = await call_llm(
+                    to_model,
+                    extra_system=extra_sys + "\n" + (
+                        "内部备忘（绝不复述本段）：你最近说过下面这些话，刚刚这句又跟它们雷同了：\n"
+                        + "；".join(f"「{s}」" for s in list(_TEXT_RECENT[key])[-3:])
+                        + "\n重写这一句：意思可以相近，但句式、开头、比喻必须全换，"
+                        "就当你是头一回想到这个说法。短一句，别客气。"
+                    ),
+                )
+                if _retry3 and _retry3.strip():
+                    answer = trim_to_sentences(_retry3.strip(), max_sentences=3)
+            except Exception:
+                pass  # 重答失败就用原答案，至少不断线
+        _TEXT_RECENT[key].append(_norm_text(answer))
 
     msgs.append({"role": "user", "content": _hist_text if _hist_text is not None else text})
     msgs.append({"role": "assistant", "content": answer})

@@ -438,6 +438,86 @@ _VOICE_CACHE: Dict[str, str] = {}
 _VOICE_KICKED = set()
 
 
+# ---------- 本地离线语音识别（2026-11-12 新增） ----------
+# 背景：SF ASR 402 余额不足、智谱 glm-asr 429 无资源包——两家付费墙同时
+# 掐死语音转写（用户永不充钱）。改为容器内离线模型：sherpa-onnx +
+# paraformer-zh-small int8（78MB，中文短句），ffmpeg 转 16k 单声道喂入。
+# 模型部署在 /root/asr_model/，缺失时静默让路给备用 API，绝不拖死回复。
+_ASR_DIR = Path("/root/asr_model")
+_LOCAL_REC = None  # 惰性单例：首次语音时才加载，吃 ~150MB 内存
+_LOCAL_REC_TRIED = False
+
+
+def _load_local_rec():
+    global _LOCAL_REC, _LOCAL_REC_TRIED
+    if _LOCAL_REC is not None:
+        return _LOCAL_REC
+    if _LOCAL_REC_TRIED:
+        return None
+    _LOCAL_REC_TRIED = True
+    try:
+        import sherpa_onnx
+        m = _ASR_DIR / "model.int8.onnx"
+        t = _ASR_DIR / "tokens.txt"
+        if not (m.is_file() and t.is_file()):
+            logger.warning("[语音]本地ASR模型缺失，走备用API")
+            return None
+        _LOCAL_REC = sherpa_onnx.OfflineRecognizer.from_paraformer(
+            str(m), str(t), num_threads=2, sample_rate=16000, feature_dim=80,
+        )
+        logger.success("[语音]本地ASR模型已加载(paraformer-zh-small int8)")
+        return _LOCAL_REC
+    except Exception as e:
+        logger.warning(f"[语音]本地ASR加载失败({type(e).__name__})，走备用API")
+        return None
+
+
+def _local_asr_sync(data: bytes) -> str:
+    import subprocess as _sub
+    import wave as _wave
+    import array as _arr
+    rec = _load_local_rec()
+    if rec is None:
+        return ""
+    src = Path("/tmp/_asar_in")
+    dst = Path("/tmp/_asar_16k.wav")
+    try:
+        src.write_bytes(data)
+        r = _sub.run(
+            ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1",
+             "-f", "wav", str(dst)],
+            capture_output=True, timeout=30,
+        )
+        if r.returncode != 0 or not dst.is_file():
+            return ""
+        with _wave.open(str(dst), "rb") as w:
+            if w.getframerate() != 16000 or w.getnchannels() != 1:
+                return ""
+            frames = w.readframes(w.getnframes())
+        samples = list(_arr.array("h", frames))
+        if not samples:
+            return ""
+        stream = rec.create_stream()
+        stream.accept_waveform(16000, [x / 32768.0 for x in samples])
+        rec.decode_stream(stream)
+        return (stream.result.text or "").strip()
+    except Exception:
+        return ""
+    finally:
+        for p in (src, dst):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+
+async def _local_asr(data: bytes) -> str:
+    """本地离线转写，全程 to_thread 不卡事件循环。<~50ms 的音频不值得跑。"""
+    if not data or len(data) < 1200:
+        return ""
+    return await asyncio.to_thread(_local_asr_sync, data)
+
+
 async def _download_bytes(url: str, limit: int = 20 * 1024 * 1024) -> bytes | None:
     """下载音频字节。优先 aiohttp，缺库/失败走 urllib 线程兜底；失败返回 None。"""
     try:
@@ -519,7 +599,11 @@ async def _voice_to_text(d: dict, bot=None) -> str:
         if not data:
             logger.warning("[语音]拿音频失败(无url且get_record失败)")
             return ""
-        text = await _asr_request(SF_ASR_KEY, SF_ASR_URL, SF_ASR_MODEL, data, "voice.mp3")
+        # 识别顺序（2026-11-12 18:00 定版）：本地离线模型优先（零成本零余额），
+        # SF / 智谱 ASR 降为备用——两家 2026-11-12 实测双双因余额 402/429 拒答。
+        text = await _local_asr(data)
+        if not text:
+            text = await _asr_request(SF_ASR_KEY, SF_ASR_URL, SF_ASR_MODEL, data, "voice.mp3")
         if not text:
             text = await _asr_request(API_KEY, BASE_URL + "/audio/transcriptions",
                                       ZHIPU_ASR_MODEL, data, "voice.mp3")

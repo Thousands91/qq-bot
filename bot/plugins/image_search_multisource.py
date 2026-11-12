@@ -171,6 +171,11 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                     if _img:
                         await image_search.finish(MessageSegment.image(_img))
                         return
+                    # tbib 空手 → hypnohub 同标签再搜一轮（第三硬池，2026-11-12）
+                    _img = await fetch_hypnohub_bytes(tbib_tags)
+                    if _img:
+                        await image_search.finish(MessageSegment.image(_img))
+                        return
                 await image_search.finish(
                     f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
                 )
@@ -178,9 +183,9 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
             await image_search.finish(f"「{query}」么，架上没有这一册。换个说法，我再替您找找。")
             return
         # 2026-11-12 16:40 用户定版：色图命令 100% 色图——dmoe 随机源（全年龄
-        # 混池）退役。lolicon 拉取失败时降级 tbib(rating:explicit 硬池)，
+        # 混池）退役。lolicon 拉取失败时降级 tbib/hypnohub 双硬池（17:10 起），
         # 还拿不到就诚实报"画送来的路上破损了"，绝不发非色图充数。
-        img = await fetch_tbib_bytes(None) or img
+        img = await _hard_pool_fallback() or img
     if img is None:
         await image_search.finish("画送来的路上破损了，今日只得作罢，改日再取。")
         return
@@ -314,6 +319,62 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
                 return data
         return None
     return await _tbib_query_bytes("rating:explicit")
+
+
+# —— hypnohub：第三硬池（2026-11-12 17:05 X10 家宽海选实测可达）——
+# booru dapi 同族接口，匿名可用。海选结论：danbooru / rule34.xxx / konachan /
+# waifu.pics / waifu.im / gelbooru 在 X10 家宽全部不可达（GFW/CF 挑战），
+# nekos.best 只剩全年龄分类——hypnohub 是唯一新增的可用硬池。
+HYPNO_API = "https://hypnohub.net/index.php"
+
+
+async def fetch_hypnohub_bytes(tags: list[str] | None = None) -> bytes | None:
+    """hypnohub 搜图，硬 R18（恒带 rating:explicit）。失败返回 None，绝不抛错。"""
+    tag_q = "+".join(["rating:explicit"] + tags) if tags else "rating:explicit"
+    url = (f"{HYPNO_API}?page=dapi&s=post&q=index&json=1&limit=100"
+           f"&tags={tag_q}&pid=0")
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=15),
+                headers={"User-Agent": _TBIB_UA},
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                arr = await resp.json(content_type=None)
+                if not arr:
+                    return None
+                random.shuffle(arr)
+                for post in arr[:4]:
+                    fu = post.get("file_url", "")
+                    if not fu:
+                        continue
+                    try:
+                        async with sess.get(
+                            fu, timeout=aiohttp.ClientTimeout(total=25),
+                            headers={"User-Agent": _TBIB_UA},
+                        ) as r2:
+                            if r2.status == 200:
+                                data = await r2.read()
+                                if 2048 < len(data) <= 8 * 1024 * 1024:
+                                    return data
+                    except Exception:
+                        continue
+                return None
+    except Exception:
+        return None
+
+
+async def _hard_pool_fallback() -> bytes | None:
+    """纯随机兜底：tbib / hypnohub 两个硬池随机先手（摊负载），全空手返回 None。"""
+    pool = [fetch_tbib_bytes(None), fetch_hypnohub_bytes(None)]
+    random.shuffle(pool)
+    for fn in pool:
+        img = await fn
+        if img:
+            return img
+    return None
 
 
 # —— 标签目录自动校正（2026-11-05）——

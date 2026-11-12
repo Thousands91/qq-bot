@@ -72,14 +72,16 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
 
     item = None
     if private and not tags:
-        # 私聊纯随机：三源轮庄——jitsu(题材杂) / tbib(大库) / lolicon
+        # 私聊纯随机：以 lolicon(r18 正池)为主。2026-11-12 用户反馈"色图不色"：
+        # jitsu 的 r18 池偏泳装/内衣级，原 34% 权重频繁抽出软图——
+        # 改为 lolicon 70% / tbib(explicit) 15% / jitsu 15%。
         _roll = random.random()
-        if _roll < 0.34:
+        if _roll < 0.15:
             _img = await fetch_jitsu_bytes(r18=True)
             if _img:
                 await image_search.finish(MessageSegment.image(_img))
                 return
-        elif _roll >= 0.67:
+        elif _roll >= 0.85:
             _img = await fetch_tbib_bytes(None)
             if _img:
                 await image_search.finish(MessageSegment.image(_img))

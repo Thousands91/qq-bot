@@ -8,6 +8,7 @@
 """
 import asyncio
 import hashlib
+import json
 import os
 import random
 import re
@@ -589,6 +590,34 @@ _TAG_CACHE: dict[str, str] = {}
 # 都能落到真标签上）；不信任标签总库存（只认 R18 实际库存）；词元黑名单
 # （son/boy 等）把族系复合标签的未成年风险挡在红线外。
 _CAND_CACHE: dict[str, list[str]] = {}
+
+# 2026-11-12：翻译/标签缓存落盘——智谱晚高峰限流频繁，白天翻译成功过的词
+# 重启后必须仍然秒出（进程内存缓存在大脑每次重启时清零，等于白翻）
+_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                           "data", "search_tag_cache.json")
+
+
+def _load_tag_cache() -> None:
+    try:
+        with open(_CACHE_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        _CAND_CACHE.update(d.get("cand", {}))
+        _TAG_CACHE.update(d.get("tag", {}))
+        _EXPLICIT_CNT.update(d.get("cnt", {}))
+    except Exception:
+        pass
+
+
+def _save_tag_cache() -> None:
+    try:
+        os.makedirs(os.path.dirname(_CACHE_FILE), exist_ok=True)
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"cand": _CAND_CACHE, "tag": _TAG_CACHE,
+                       "cnt": _EXPLICIT_CNT}, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 _CAND_PROMPT = (
     "你把中文搜索词翻译成二次元图库的英文检索词。"
     "只输出英文，最多3个不同说法的候选，用逗号分隔，全小写，"
@@ -651,6 +680,7 @@ async def _translate_candidates(query: str) -> list[str]:
     cands = [c for c in cands if c]
     if cands:
         _CAND_CACHE[query] = cands
+        _save_tag_cache()
     return cands
 
 
@@ -689,6 +719,8 @@ async def _tag_candidates_for(w: str) -> list[str]:
 
 
 _EXPLICIT_CNT: dict[str, int] = {}
+
+_load_tag_cache()  # 必须在三个缓存字典都定义后调用
 
 
 async def _rank_by_explicit(tags: list[str]) -> list[str]:
@@ -782,6 +814,7 @@ async def translate_tags(query: str) -> str:
     tags = raw.splitlines()[0].strip().strip('"').lower()
     if tags:
         _TAG_CACHE[query] = tags
+        _save_tag_cache()
     return tags
 
 

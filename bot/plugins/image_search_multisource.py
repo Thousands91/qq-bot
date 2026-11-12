@@ -255,13 +255,11 @@ _ZH_TAG_MAP = {
 }
 
 
-# —— R18 池统一排除表（2026-11-13 03:10 用户定版）——
-# booru 的 rating:explicit 只是"限制级"。只排真正"非色情/猎奇事故"的三类：
-# guro=血腥猎奇、scat=排泄系、vore=吞噬猎奇——这三类不管谁抽中都算事故。
-# 男同(yaoi/bara)与兽人(furry/anthro)不排（03:10 用户拍板：是色图就不该
-# 因题材被一竿子打死）；blood 也不排（吸血鬼咬痕等带血色图是正经色图，
-# 真猎奇的已带 guro 标签会被排除）。
-_R18_EXCLUDE = ["-guro", "-scat", "-vore"]
+# —— R18 池统一排除表（2026-11-13 03:13 用户定版）——
+# booru 的 rating:explicit 只是"限制级"。只排 guro=血腥猎奇（03:02 用户
+# 实拍 gore 脸定案）。scat/vore/男同/兽人/blood 全部放开（03:13 用户
+# 拍板：是限制级内容就保留被搜到的资格，不因题材一竿子打死）。
+_R18_EXCLUDE = ["-guro"]
 
 
 async def _tbib_query_bytes(tag_str: str) -> bytes | None:

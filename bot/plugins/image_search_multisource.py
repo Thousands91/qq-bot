@@ -90,7 +90,9 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
             tbib_tags = await _search_tag_candidates(query)
         lolicon_first = random.random() < 0.5
         got_dup = False
-        for attempt in range(2):
+        # 4次重试(2026-11-13 03:02)：2次时撞已发图概率≈8%(99张池前4张抽2轮)，
+        # 用户实测撞中后误报"都翻过了"——实际只撞1张，加次数压低误报率
+        for attempt in range(4):
             use_lolicon = (attempt == 0) == lolicon_first
             if use_lolicon:
                 item = await fetch_lolicon(r18=1, tags=tags)
@@ -317,8 +319,11 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
     # 冷门标签总图数可能很少，pid 不能翻太深；小页码取一批候选随机挑。
     # 注意：booru API 的标签分隔符必须用裸 "+"——走 aiohttp params 会被
     # 编码成 %2B 导致永远搜不到，所以这里手动拼 query string。
+    # 血腥排除（2026-11-13 03:02 用户实拍定版）：booru 的 rating:explicit
+    # 是"限制级"，血腥猎奇(guro/blood)也算——色图命令抽中猎奇图货不对板。
+    # 统一追加 -guro -blood 排除；代价是带血元素的色图一并让路，值得。
     if tags:
-        _q = "+".join(["rating:explicit"] + tags)
+        _q = "+".join(["rating:explicit", "-guro", "-blood"] + tags)
         data = await _tbib_query_bytes(_q)
         if data:
             return data
@@ -328,11 +333,11 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
         for t in tags:
             if t.startswith("rating:"):
                 continue
-            data = await _tbib_query_bytes(f"rating:explicit+{t}")
+            data = await _tbib_query_bytes(f"rating:explicit+-guro+-blood+{t}")
             if data:
                 return data
         return None
-    return await _tbib_query_bytes("rating:explicit")
+    return await _tbib_query_bytes("rating:explicit+-guro+-blood")
 
 
 # —— hypnohub：第三硬池（2026-11-12 17:05 X10 家宽海选实测可达）——
@@ -344,7 +349,7 @@ HYPNO_API = "https://hypnohub.net/index.php"
 
 async def fetch_hypnohub_bytes(tags: list[str] | None = None) -> bytes | None:
     """hypnohub 搜图，硬 R18（恒带 rating:explicit）。失败返回 None，绝不抛错。"""
-    tag_q = "+".join(["rating:explicit"] + tags) if tags else "rating:explicit"
+    tag_q = "+".join(["rating:explicit", "-guro", "-blood"] + tags) if tags else "rating:explicit+-guro+-blood"
     url = (f"{HYPNO_API}?page=dapi&s=post&q=index&json=1&limit=100"
            f"&tags={tag_q}&pid=0")
     try:
@@ -744,7 +749,7 @@ async def _rank_by_explicit(tags: list[str]) -> list[str]:
                 async with aiohttp.ClientSession() as sess:
                     async with sess.get(
                         f"{TBIB_API}?page=dapi&s=post&q=index&limit=1"
-                        f"&tags=rating:explicit+{t}",
+                        f"&tags=rating:explicit+-guro+-blood+{t}",
                         timeout=aiohttp.ClientTimeout(total=15),
                         headers={"User-Agent": _TBIB_UA},
                     ) as resp:

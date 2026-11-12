@@ -255,6 +255,15 @@ _ZH_TAG_MAP = {
 }
 
 
+# —— R18 池统一排除表（2026-11-13 03:05 用户定版）——
+# booru 的 rating:explicit 只是"限制级"：血腥猎奇(guro/blood)、男同向
+# (yaoi/bara/males_only)、兽人(furry/anthro)、恶趣味(scat/vore)全算
+# explicit——色图命令抽中即货不对板。全链统一追加排除。
+# 实测：全站 explicit 579万→302万，maid/genshin 等美少女类不受影响。
+_R18_EXCLUDE = ["-guro", "-blood", "-yaoi", "-bara", "-males_only",
+                "-scat", "-vore", "-furry", "-anthro"]
+
+
 async def _tbib_query_bytes(tag_str: str) -> bytes | None:
     """单个标签组合查 tbib。失败/无图返回 None。"""
     # 大页抓取(limit=100, pid=0)：小池子标签(如仅 1 张的 diaochan_(honor_of_kings))
@@ -319,11 +328,8 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
     # 冷门标签总图数可能很少，pid 不能翻太深；小页码取一批候选随机挑。
     # 注意：booru API 的标签分隔符必须用裸 "+"——走 aiohttp params 会被
     # 编码成 %2B 导致永远搜不到，所以这里手动拼 query string。
-    # 血腥排除（2026-11-13 03:02 用户实拍定版）：booru 的 rating:explicit
-    # 是"限制级"，血腥猎奇(guro/blood)也算——色图命令抽中猎奇图货不对板。
-    # 统一追加 -guro -blood 排除；代价是带血元素的色图一并让路，值得。
     if tags:
-        _q = "+".join(["rating:explicit", "-guro", "-blood"] + tags)
+        _q = "+".join(["rating:explicit"] + _R18_EXCLUDE + tags)
         data = await _tbib_query_bytes(_q)
         if data:
             return data
@@ -333,11 +339,11 @@ async def fetch_tbib_bytes(tags: list[str] | None = None) -> bytes | None:
         for t in tags:
             if t.startswith("rating:"):
                 continue
-            data = await _tbib_query_bytes(f"rating:explicit+-guro+-blood+{t}")
+            data = await _tbib_query_bytes("+".join(["rating:explicit"] + _R18_EXCLUDE + [t]))
             if data:
                 return data
         return None
-    return await _tbib_query_bytes("rating:explicit+-guro+-blood")
+    return await _tbib_query_bytes("+".join(["rating:explicit"] + _R18_EXCLUDE))
 
 
 # —— hypnohub：第三硬池（2026-11-12 17:05 X10 家宽海选实测可达）——
@@ -349,7 +355,7 @@ HYPNO_API = "https://hypnohub.net/index.php"
 
 async def fetch_hypnohub_bytes(tags: list[str] | None = None) -> bytes | None:
     """hypnohub 搜图，硬 R18（恒带 rating:explicit）。失败返回 None，绝不抛错。"""
-    tag_q = "+".join(["rating:explicit", "-guro", "-blood"] + tags) if tags else "rating:explicit+-guro+-blood"
+    tag_q = "+".join(["rating:explicit"] + _R18_EXCLUDE + tags) if tags else "+".join(["rating:explicit"] + _R18_EXCLUDE)
     url = (f"{HYPNO_API}?page=dapi&s=post&q=index&json=1&limit=100"
            f"&tags={tag_q}&pid=0")
     try:
@@ -749,7 +755,7 @@ async def _rank_by_explicit(tags: list[str]) -> list[str]:
                 async with aiohttp.ClientSession() as sess:
                     async with sess.get(
                         f"{TBIB_API}?page=dapi&s=post&q=index&limit=1"
-                        f"&tags=rating:explicit+-guro+-blood+{t}",
+                        f"&tags=" + "+".join(["rating:explicit"] + _R18_EXCLUDE + [t]),
                         timeout=aiohttp.ClientTimeout(total=15),
                         headers={"User-Agent": _TBIB_UA},
                     ) as resp:

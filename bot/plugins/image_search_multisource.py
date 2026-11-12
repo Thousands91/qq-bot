@@ -117,10 +117,19 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
             await image_search.finish(
                 f"「{query}」这几册您都翻过了，画师尚未落新笔——改日再来，或有新货。"
             )
-        else:
+            return
+        # 2026-11-12 用户定版"色图命令 100% 出图"：词源枯竭不拿文字打发，
+        # 降级硬池随机（真实 R18 硬池，非充数）并如实告知货不对板。
+        _alt = await _hard_pool_fallback()
+        if _alt:
             await image_search.finish(
-                f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
+                MessageSegment.image(_alt)
+                + MessageSegment.text(f"「{query}」这词图库里确实没有存货，这幅是随机镇架之作。")
             )
+            return
+        await image_search.finish(
+            f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
+        )
         return
 
     item = await fetch_lolicon(r18=1 if private else 0, tags=tags)
@@ -176,6 +185,14 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                     if _img:
                         await image_search.finish(MessageSegment.image(_img))
                         return
+                # 词源真枯竭 → 硬池随机+如实告知（2026-11-12 定版 100% 出图）
+                _alt = await _hard_pool_fallback()
+                if _alt:
+                    await image_search.finish(
+                        MessageSegment.image(_alt)
+                        + MessageSegment.text(f"「{query}」这词图库里确实没有存货，这幅是随机镇架之作。")
+                    )
+                    return
                 await image_search.finish(
                     f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
                 )
@@ -229,6 +246,10 @@ _ZH_TAG_MAP = {
     # 女性向扩展
     "姨": ["milf", "1girl"], "阿姨": ["milf", "1girl"],
     "熟女": ["milf", "1girl"], "御姐": ["milf", "1girl"],
+    # 亲属称谓（2026-11-12：AI 翻译对奶奶/爷爷翻词不稳定导致搜空，
+    # 实测 tbib 库存 grandma 22 张 / grandfather 7 张——直写映射绕过 AI）
+    "奶奶": ["grandma"], "外婆": ["grandma"], "姥姥": ["grandma"],
+    "爷爷": ["grandfather"], "外公": ["grandfather"], "姥爷": ["grandfather"],
     # 王者荣耀（2026-11-05 实测：diaochan 无后缀标签被错标污染为宝可梦内容，禁用；
     # 精确标签 diaochan_(honor_of_kings) 全库仅 1 张全年龄图，聊胜于无）
     "王者荣耀": ["honor_of_kings"], "貂蝉": ["diaochan_(honor_of_kings)"],

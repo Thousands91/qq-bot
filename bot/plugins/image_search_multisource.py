@@ -16,6 +16,7 @@ import aiohttp
 from ddgs import DDGS
 from nonebot import on_command
 from nonebot.params import CommandArg
+from nonebot.logger import logger
 from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
@@ -398,13 +399,13 @@ async def _tbib_tag_index(prefix: str) -> list[tuple[str, int]]:
     url = f"{TBIB_BASE}/autocomplete.php?q={prefix}"
     try:
         async with aiohttp.ClientSession() as sess:
-            async with sess.get(
-                url,
-                timeout=aiohttp.ClientTimeout(total=10),
-                headers={"User-Agent": _TBIB_UA},
-            ) as resp:
-                if resp.status != 200:
-                    return []
+                async with sess.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    headers={"User-Agent": _TBIB_UA},
+                ) as resp:
+                    if resp.status != 200:
+                        return []
                 arr = await resp.json(content_type=None)
                 tags = []
                 for it in (arr or []):
@@ -581,37 +582,51 @@ _CAND_PROMPT = (
 )
 
 
+async def _ai_post(payload: dict, what: str) -> str:
+    """调 AI 接口统一入口：20 秒超时 + 失败重试 1 次 + 必打日志。
+    （2026-11-12 实锤：X10 家宽到智谱偶发读超时，原 10 秒超时+静默吞异常
+    导致翻译链无声死亡，用户搜"奶奶"只见搜空文案毫无排查线索——坑93 重演）"""
+    for i in range(2):
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.post(
+                    f"{AI_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {AI_KEY}"},
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    data = await resp.json(content_type=None)
+                return str(data["choices"][0]["message"]["content"]).strip()
+        except Exception as e:
+            logger.warning(f"[搜图]AI调用失败({what})第{i + 1}次: {type(e).__name__} {e}")
+    return ""
+
+
 async def _translate_candidates(query: str) -> list[str]:
     """中文词 → ≤3 个朴素英文候选词。失败返回 []，绝不抛错。"""
     if query in _CAND_CACHE:
         return _CAND_CACHE[query]
-    try:
-        async with aiohttp.ClientSession() as sess:
-            async with sess.post(
-                f"{AI_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {AI_KEY}"},
-                json={
-                    "model": AI_MODEL,
-                    "max_tokens": 60,
-                    "temperature": 0,
-                    # glm-4.7-flash+ 默认开深度思考，会把正文吃空——显式关闭
-                    "thinking": {"type": "disabled"},
-                    "messages": [
-                        {"role": "system", "content": _CAND_PROMPT},
-                        {"role": "user", "content": query},
-                    ],
-                },
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                data = await resp.json(content_type=None)
-        raw = data["choices"][0]["message"]["content"].strip().splitlines()[0]
-        cands = [t.strip().strip('"').lower() for t in raw.split(",")]
-        cands = [c for c in cands if c]
-        if cands:
-            _CAND_CACHE[query] = cands
-        return cands
-    except Exception:
+    raw = await _ai_post(
+        {
+            "model": AI_MODEL,
+            "max_tokens": 60,
+            "temperature": 0,
+            # glm-4.7-flash+ 默认开深度思考，会把正文吃空——显式关闭
+            "thinking": {"type": "disabled"},
+            "messages": [
+                {"role": "system", "content": _CAND_PROMPT},
+                {"role": "user", "content": query},
+            ],
+        },
+        "候选词",
+    )
+    if not raw:
         return []
+    cands = [t.strip().strip('"').lower() for t in raw.splitlines()[0].split(",")]
+    cands = [c for c in cands if c]
+    if cands:
+        _CAND_CACHE[query] = cands
+    return cands
 
 
 # 词元黑名单：族系复合标签（xx_and_son 之类）可能带出未成年向内容——红线
@@ -666,7 +681,7 @@ async def _rank_by_explicit(tags: list[str]) -> list[str]:
                     async with sess.get(
                         f"{TBIB_API}?page=dapi&s=post&q=index&limit=1"
                         f"&tags=rating:explicit+{t}",
-                        timeout=aiohttp.ClientTimeout(total=10),
+                        timeout=aiohttp.ClientTimeout(total=15),
                         headers={"User-Agent": _TBIB_UA},
                     ) as resp:
                         if resp.status == 200:
@@ -719,34 +734,25 @@ async def translate_tags(query: str) -> str:
     """中文关键词 → 图库英文标签，结果缓存。失败返回空串。"""
     if query in _TAG_CACHE:
         return _TAG_CACHE[query]
-    try:
-        async with aiohttp.ClientSession() as sess:
-            async with sess.post(
-                f"{AI_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {AI_KEY}"},
-                json={
-                    "model": AI_MODEL,
-                    "max_tokens": 60,
-                    "temperature": 0,
-                    # glm-4.7-flash+ 默认开深度思考，会把正文吃空——显式关闭
-                    "thinking": {"type": "disabled"},
-                    "messages": [
-                        {"role": "system", "content": _TRANSLATE_PROMPT},
-                        {"role": "user", "content": query},
-                    ],
-                },
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                data = await resp.json()
-                tags = (
-                    data["choices"][0]["message"]["content"].strip().splitlines()[0]
-                )
-                tags = tags.strip().strip('"').lower()
-                if tags:
-                    _TAG_CACHE[query] = tags
-                return tags
-    except Exception:
+    raw = await _ai_post(
+        {
+            "model": AI_MODEL,
+            "max_tokens": 60,
+            "temperature": 0,
+            "thinking": {"type": "disabled"},
+            "messages": [
+                {"role": "system", "content": _TRANSLATE_PROMPT},
+                {"role": "user", "content": query},
+            ],
+        },
+        "标签翻译",
+    )
+    if not raw:
         return ""
+    tags = raw.splitlines()[0].strip().strip('"').lower()
+    if tags:
+        _TAG_CACHE[query] = tags
+    return tags
 
 
 async def fetch_safebooru(tags: str) -> str:

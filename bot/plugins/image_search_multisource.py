@@ -583,10 +583,11 @@ _CAND_PROMPT = (
 
 
 async def _ai_post(payload: dict, what: str) -> str:
-    """调 AI 接口统一入口：20 秒超时 + 失败重试 1 次 + 必打日志。
-    （2026-11-12 实锤：X10 家宽到智谱偶发读超时，原 10 秒超时+静默吞异常
-    导致翻译链无声死亡，用户搜"奶奶"只见搜空文案毫无排查线索——坑93 重演）"""
-    for i in range(2):
+    """调 AI 接口统一入口：20 秒超时 + 429 限流递增退避重试(最多4次) + 必打日志。
+    （2026-11-12 实锤：X10 到智谱偶发读超时 + 晚高峰 429 限流实测 3拒1成，
+    原 10 秒超时+静默吞异常导致翻译链无声死亡，用户搜"奶奶"只见搜空文案
+    毫无排查线索——坑93 重演。成功结果有缓存，重试只发生在首次。）"""
+    for i in range(4):
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.post(
@@ -595,10 +596,19 @@ async def _ai_post(payload: dict, what: str) -> str:
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as resp:
+                    if resp.status == 429:
+                        logger.warning(
+                            f"[搜图]AI限流429({what})第{i + 1}次,退避重试"
+                        )
+                        await asyncio.sleep(3 + 3 * i)
+                        continue
                     data = await resp.json(content_type=None)
                 return str(data["choices"][0]["message"]["content"]).strip()
         except Exception as e:
-            logger.warning(f"[搜图]AI调用失败({what})第{i + 1}次: {type(e).__name__} {e}")
+            logger.warning(
+                f"[搜图]AI调用失败({what})第{i + 1}次: {type(e).__name__} {e}"
+            )
+            await asyncio.sleep(2)
     return ""
 
 

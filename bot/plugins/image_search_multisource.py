@@ -407,37 +407,41 @@ _TAG_INDEX_CACHE: dict[str, list[tuple[str, int]]] = {}
 
 
 async def _tbib_tag_index(prefix: str) -> list[tuple[str, int]]:
-    """查标签自动补全目录（前缀匹配），返回 [(标签名, 图数)]。失败返回 []。"""
+    """查标签自动补全目录（前缀匹配），返回 [(标签名, 图数)]。
+    失败自动重试 1 次（2026-11-12 X10 实测偶发慢，一次超时就放弃会让
+    整条对齐链空手而归）。仍失败返回 []。"""
     key = prefix.lower()
     if key in _TAG_INDEX_CACHE:
         return _TAG_INDEX_CACHE[key]
     url = f"{TBIB_BASE}/autocomplete.php?q={prefix}"
-    try:
-        async with aiohttp.ClientSession() as sess:
+    for _attempt in range(2):
+        try:
+            async with aiohttp.ClientSession() as sess:
                 async with sess.get(
                     url,
-                    timeout=aiohttp.ClientTimeout(total=15),
+                    timeout=aiohttp.ClientTimeout(total=12),
                     headers={"User-Agent": _TBIB_UA},
                 ) as resp:
-                    if resp.status != 200:
-                        return []
-                arr = await resp.json(content_type=None)
-                tags = []
-                for it in (arr or []):
-                    v = _html.unescape(str(it.get("value", ""))).strip()
-                    if not v:
-                        continue
-                    label = _html.unescape(str(it.get("label", "")))
-                    cnt_str = label.rsplit("(", 1)[-1].rstrip(") ").strip()
-                    try:
-                        cnt = int(cnt_str)
-                    except ValueError:
-                        cnt = 0
-                    tags.append((v, cnt))
-                _TAG_INDEX_CACHE[key] = tags
-                return tags
-    except Exception:
-        return []
+                    if resp.status == 200:
+                        arr = await resp.json(content_type=None)
+                        tags = []
+                        for it in (arr or []):
+                            v = _html.unescape(str(it.get("value", ""))).strip()
+                            if not v:
+                                continue
+                            label = _html.unescape(str(it.get("label", "")))
+                            cnt_str = label.rsplit("(", 1)[-1].rstrip(") ").strip()
+                            try:
+                                cnt = int(cnt_str)
+                            except ValueError:
+                                cnt = 0
+                            tags.append((v, cnt))
+                        _TAG_INDEX_CACHE[key] = tags
+                        return tags
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    return []
 
 
 async def _fix_tbib_tags(tags: list[str]) -> list[str]:
@@ -604,6 +608,7 @@ def _load_tag_cache() -> None:
         _CAND_CACHE.update(d.get("cand", {}))
         _TAG_CACHE.update(d.get("tag", {}))
         _EXPLICIT_CNT.update(d.get("cnt", {}))
+        _FINAL_CACHE.update(d.get("final", {}))
     except Exception:
         pass
 
@@ -613,7 +618,8 @@ def _save_tag_cache() -> None:
         os.makedirs(os.path.dirname(_CACHE_FILE), exist_ok=True)
         with open(_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump({"cand": _CAND_CACHE, "tag": _TAG_CACHE,
-                       "cnt": _EXPLICIT_CNT}, f, ensure_ascii=False)
+                       "cnt": _EXPLICIT_CNT, "final": _FINAL_CACHE},
+                      f, ensure_ascii=False)
     except Exception:
         pass
 
@@ -719,8 +725,9 @@ async def _tag_candidates_for(w: str) -> list[str]:
 
 
 _EXPLICIT_CNT: dict[str, int] = {}
+_FINAL_CACHE: dict[str, list[str]] = {}
 
-_load_tag_cache()  # 必须在三个缓存字典都定义后调用
+_load_tag_cache()  # 必须在四个缓存字典都定义后调用
 
 
 async def _rank_by_explicit(tags: list[str]) -> list[str]:
@@ -756,7 +763,11 @@ async def _rank_by_explicit(tags: list[str]) -> list[str]:
 async def _search_tag_candidates(query: str) -> list[str] | None:
     """中文词 → 图库真实标签列表（explicit 库存降序）。
     返回 None 表示 AI 翻译通道挂了（限流/超时），查询根本没执行——
-    调用方据此说"暂时查不了"而不是"图库里没有"（假话比不回更伤信任）。"""
+    调用方据此说"暂时查不了"而不是"图库里没有"（假话比不回更伤信任）。
+    对齐成功的最终结果落盘缓存（终版不再重复打目录请求）。"""
+    final = _FINAL_CACHE.get(query)
+    if final:
+        return list(final)
     cands = await _translate_candidates(query)
     if not cands:
         return None
@@ -767,7 +778,11 @@ async def _search_tag_candidates(query: str) -> list[str] | None:
                 tags.append(t)
     if not tags:
         return []
-    return await _rank_by_explicit(tags[:6])
+    ranked = await _rank_by_explicit(tags[:6])
+    if ranked:
+        _FINAL_CACHE[query] = ranked
+        _save_tag_cache()
+    return ranked
 
 
 _TRANSLATE_PROMPT = (

@@ -428,12 +428,21 @@ async def _image_sticker_name(url: str) -> str:
 
 
 # ---------- 语音转文字（2026-11-07 新增：给阿萨尔装"耳朵"） ----------
-# 硅基流动 SenseVoiceSmall（免费档）优先；未配置/失败时智谱 glm-asr 兜底（同 key，付费）。
+# 2026-11-12 19:20 识别链定版：真·免费云端优先 → 本地离线保底 → 付费API垫底。
+#   1) 百度短语音识别标准版：个人实名送 5万次、永久有效（dev_pid=1537）
+#   2) 讯飞语音听写：每天 500 次长期免费（wss 流式）
+#   3) 本地 sherpa-onnx 离线模型（零成本零余额，云端全灭时兜底，永不死）
+#   4) 硅基流动 SenseVoiceSmall / 5) 智谱 glm-asr：余额制"假免费"，仅垫底。
 # 结果按 file_id 永久缓存（转写结果不随时间变化，同一条语音绝不二次计费）。
 SF_ASR_KEY = os.getenv("SILICONFLOW_API_KEY", "")
 SF_ASR_URL = "https://api.siliconflow.cn/v1/audio/transcriptions"
 SF_ASR_MODEL = os.getenv("SILICONFLOW_ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 ZHIPU_ASR_MODEL = os.getenv("ZHIPU_ASR_MODEL", "glm-asr-2512")
+_BAIDU_ASR_KEY = os.getenv("BAIDU_ASR_API_KEY", "")
+_BAIDU_ASR_SECRET = os.getenv("BAIDU_ASR_SECRET_KEY", "")
+_XFYUN_APP_ID = os.getenv("XFYUN_APP_ID", "")
+_XFYUN_API_KEY = os.getenv("XFYUN_API_KEY", "")
+_XFYUN_API_SECRET = os.getenv("XFYUN_API_SECRET", "")
 _VOICE_CACHE: Dict[str, str] = {}
 _VOICE_KICKED = set()
 
@@ -566,6 +575,166 @@ async def _asr_request(key: str, url: str, model: str, data: bytes, fname: str) 
     return ""
 
 
+# ---------- 云端免费 ASR（2026-11-12 19:20 新增） ----------
+# 百度短语音识别标准版：个人实名一次性送 5 万次、永久有效（坑95教训：只认
+# "额度制免费"，不认"余额制免费"）。讯飞语音听写：每天 500 次长期免费。
+# QQ 语音上限 60s，两家都够。输入统一 ffmpeg 转 16k 单声道 raw pcm（s16le）。
+_BAIDU_TOKEN = ""
+_BAIDU_TOKEN_DEADLINE = 0.0
+
+
+def _pcm16k_sync(data: bytes) -> bytes:
+    """ffmpeg 转原始 PCM（16k/单声道/s16le）。失败返回空 bytes。"""
+    import subprocess as _sub
+    src = Path("/tmp/_asar_in2")
+    dst = Path("/tmp/_asar_pcm")
+    try:
+        src.write_bytes(data)
+        r = _sub.run(
+            ["ffmpeg", "-y", "-i", str(src), "-ar", "16000", "-ac", "1",
+             "-f", "s16le", str(dst)],
+            capture_output=True, timeout=30,
+        )
+        if r.returncode != 0 or not dst.is_file():
+            return b""
+        return dst.read_bytes()
+    except Exception:
+        return b""
+    finally:
+        for p in (src, dst):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+
+async def _pcm16k(data: bytes) -> bytes:
+    if not data:
+        return b""
+    return await asyncio.to_thread(_pcm16k_sync, data)
+
+
+async def _baidu_asr(data: bytes) -> str:
+    """百度短语音识别标准版。未配 key 静默跳过；失败打一行日志让路下一级。"""
+    global _BAIDU_TOKEN, _BAIDU_TOKEN_DEADLINE
+    if not (_BAIDU_ASR_KEY and _BAIDU_ASR_SECRET) or not data:
+        return ""
+    try:
+        import aiohttp as _aio
+        import time as _t
+        now = _t.time()
+        if not _BAIDU_TOKEN or now >= _BAIDU_TOKEN_DEADLINE:
+            async with _aio.ClientSession() as sess:
+                async with sess.post(
+                    "https://aip.baidubce.com/oauth/2.0/token",
+                    params={"grant_type": "client_credentials",
+                            "client_id": _BAIDU_ASR_KEY,
+                            "client_secret": _BAIDU_ASR_SECRET},
+                    timeout=_aio.ClientTimeout(total=15),
+                ) as resp:
+                    tj = await resp.json(content_type=None)
+            tk = str((tj or {}).get("access_token") or "")
+            if not tk:
+                logger.warning(f"[语音]百度token获取失败: {str(tj)[:150]}")
+                return ""
+            _BAIDU_TOKEN = tk
+            _BAIDU_TOKEN_DEADLINE = now + max(600, int(tj.get("expires_in") or 2592000) - 86400)
+        pcm = await _pcm16k(data)
+        if not pcm or len(pcm) < 800:
+            return ""
+        import base64 as _b64
+        payload = {
+            "format": "pcm", "rate": 16000, "channel": 1,
+            "cuid": "asar_bot_x10", "token": _BAIDU_TOKEN,
+            "dev_pid": 1537,  # 短语音识别标准版·中文普通话（消耗 5 万次免费额度）
+            "speech": _b64.b64encode(pcm).decode(), "len": len(pcm),
+        }
+        async with _aio.ClientSession() as sess:
+            async with sess.post(
+                "https://vop.baidu.com/server_api",
+                json=payload, timeout=_aio.ClientTimeout(total=30),
+            ) as resp:
+                j = await resp.json(content_type=None)
+        if isinstance(j, dict) and j.get("err_no") == 0:
+            res = j.get("result") or []
+            return str(res[0] or "").strip() if res else ""
+        logger.warning(f"[语音]百度ASR失败 err_no={j.get('err_no') if isinstance(j, dict) else '?'}"
+                       f" {str(j)[:120]}")
+    except Exception as e:
+        logger.warning(f"[语音]百度ASR异常: {type(e).__name__} {e}")
+    return ""
+
+
+async def _xfyun_asr(data: bytes) -> str:
+    """讯飞语音听写（流式 wss，一次性把整段发完再收结果）。
+    未配 key 静默跳过；失败打一行日志让路下一级。"""
+    if not (_XFYUN_APP_ID and _XFYUN_API_KEY and _XFYUN_API_SECRET) or not data:
+        return ""
+    try:
+        import aiohttp as _aio
+        import base64 as _b64
+        import hashlib as _h
+        import hmac as _hm
+        from datetime import datetime as _dt, timezone as _tz
+        from urllib.parse import urlencode as _ue
+
+        date = _dt.now(_tz.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        origin = "host: iat-api.xfyun.cn\ndate: " + date + "\nGET /v2/iat HTTP/1.1"
+        sig = _b64.b64encode(
+            _hm.new(_XFYUN_API_SECRET.encode(), origin.encode(), _h.sha256).digest()
+        ).decode()
+        auth = _b64.b64encode(
+            f'api_key="{_XFYUN_API_KEY}", algorithm="hmac-sha256", '
+            f'headers="host date request-line", signature="{sig}"'.encode()
+        ).decode()
+        url = ("wss://iat-api.xfyun.cn/v2/iat?" + _ue(
+            {"authorization": auth, "date": date, "host": "iat-api.xfyun.cn"}))
+        pcm = await _pcm16k(data)
+        if not pcm or len(pcm) < 800:
+            return ""
+        text_parts: list = []
+        async with _aio.ClientSession() as sess:
+            async with sess.ws_connect(url, timeout=_aio.ClientTimeout(total=30)) as ws:
+                step = 1280  # 官方建议帧大小
+                first = True
+                for i in range(0, len(pcm), step):
+                    chunk = pcm[i:i + step]
+                    last = i + step >= len(pcm)
+                    msg = {
+                        "data": {
+                            "status": 2 if last else (0 if first else 1),
+                            "format": "audio/L16;rate=16000",
+                            "encoding": "raw",
+                            "audio": _b64.b64encode(chunk).decode(),
+                        }
+                    }
+                    if first:
+                        msg["common"] = {"app_id": _XFYUN_APP_ID}
+                        msg["business"] = {"language": "zh_cn", "domain": "iat",
+                                           "accent": "mandarin"}
+                    await ws.send_json(msg)
+                    first = False
+                # 收结果：status=2 为末帧
+                async for m in ws:
+                    if m.type != _aio.WSMsgType.TEXT:
+                        break
+                    j = m.json()
+                    code = (j or {}).get("code", 0)
+                    if code != 0:
+                        logger.warning(f"[语音]讯飞ASR失败 code={code} {str(j)[:120]}")
+                        return ""
+                    dr = (j.get("data") or {}).get("result") or {}
+                    for wseg in dr.get("ws") or []:
+                        for cw in wseg.get("cw") or []:
+                            text_parts.append(str(cw.get("w") or ""))
+                    if (j.get("data") or {}).get("status") == 2:
+                        break
+        return "".join(text_parts).strip()
+    except Exception as e:
+        logger.warning(f"[语音]讯飞ASR异常: {type(e).__name__} {e}")
+    return ""
+
+
 async def _voice_to_text(d: dict, bot=None) -> str:
     """语音段 -> 文本。拿音频两路：段里自带 url 直下；否则 OneBot get_record 转 mp3。
     失败返回空串（上层给"[语音:没听清]"标记），绝不抛错拖死回复。"""
@@ -599,9 +768,14 @@ async def _voice_to_text(d: dict, bot=None) -> str:
         if not data:
             logger.warning("[语音]拿音频失败(无url且get_record失败)")
             return ""
-        # 识别顺序（2026-11-12 18:00 定版）：本地离线模型优先（零成本零余额），
-        # SF / 智谱 ASR 降为备用——两家 2026-11-12 实测双双因余额 402/429 拒答。
-        text = await _local_asr(data)
+        # 识别链（2026-11-12 19:20 定版，用户拍板）：真·免费云端优先
+        # （百度5万次永久额度 → 讯飞每天500次），本地离线降为云端全灭时的
+        # 保底（永不死），SF/智谱余额制"假免费"仅垫底。
+        text = await _baidu_asr(data)
+        if not text:
+            text = await _xfyun_asr(data)
+        if not text:
+            text = await _local_asr(data)
         if not text:
             text = await _asr_request(SF_ASR_KEY, SF_ASR_URL, SF_ASR_MODEL, data, "voice.mp3")
         if not text:

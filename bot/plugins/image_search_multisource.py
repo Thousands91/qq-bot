@@ -72,20 +72,11 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
 
     item = None
     if private and not tags:
-        # 私聊纯随机：以 lolicon(r18 正池)为主。2026-11-12 用户反馈"色图不色"：
-        # jitsu 的 r18 池偏泳装/内衣级，原 34% 权重频繁抽出软图——
-        # 改为 lolicon 70% / tbib(explicit) 15% / jitsu 15%。
-        _roll = random.random()
-        if _roll < 0.15:
-            _img = await fetch_jitsu_bytes(r18=True)
-            if _img:
-                await image_search.finish(MessageSegment.image(_img))
-                return
-        elif _roll >= 0.85:
-            _img = await fetch_tbib_bytes(None)
-            if _img:
-                await image_search.finish(MessageSegment.image(_img))
-                return
+        # 2026-11-12 16:40 用户定版：纯随机 100% 色图——不再轮庄。
+        # jitsu 的 r18 池是泳装/内衣级软图（原权重 34%→15% 仍被抽中两次），整体退役；
+        # tbib 无标签分支本就强制 rating:explicit（硬池，2026-11-05 定的规矩），
+        # 保留作 lolicon 挂掉时的降级源。主路直接放行走下面的 lolicon r18。
+        pass
     if private and tags:
         # 带词私聊：Lolicon ↔ TBIB 随机做庄 + 近期去重。
         # 实测 Lolicon 对"王者荣耀"等小池子标签每次返回同一张（上游随机失效），
@@ -186,9 +177,10 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                 return
             await image_search.finish(f"「{query}」么，架上没有这一册。换个说法，我再替您找找。")
             return
-        alt = await fetch_random_img()
-        if alt:
-            img = await download_image(alt)
+        # 2026-11-12 16:40 用户定版：色图命令 100% 色图——dmoe 随机源（全年龄
+        # 混池）退役。lolicon 拉取失败时降级 tbib(rating:explicit 硬池)，
+        # 还拿不到就诚实报"画送来的路上破损了"，绝不发非色图充数。
+        img = await fetch_tbib_bytes(None) or img
     if img is None:
         await image_search.finish("画送来的路上破损了，今日只得作罢，改日再取。")
         return

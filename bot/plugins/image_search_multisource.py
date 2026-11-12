@@ -83,11 +83,9 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
         # 轮庄利用 TBIB 同词库存（如 honor_of_kings R18 有 26 张）拉低重复率。
         tbib_tags = _ZH_TAG_MAP.get(query)
         if tbib_tags is None:
-            bt_raw = await translate_tags(query)
-            tbib_tags = [t.strip() for t in bt_raw.split(",") if t.strip()] if bt_raw else None
-            if tbib_tags:
-                # AI 翻译不可靠（圈内写法对不上），过一遍图库标签目录校正
-                tbib_tags = await _fix_tbib_tags(tbib_tags)
+            # 2026-11-12 22:40 智能链定版：AI 只出朴素英文候选词，
+            # 标签对齐全权交给图库目录反查（词元边界+安全词表+explicit库存排序）
+            tbib_tags = await _search_tag_candidates(query)
         lolicon_first = random.random() < 0.5
         got_dup = False
         for attempt in range(2):
@@ -117,19 +115,11 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
             await image_search.finish(
                 f"「{query}」这几册您都翻过了，画师尚未落新笔——改日再来，或有新货。"
             )
-            return
-        # 2026-11-12 用户定版"色图命令 100% 出图"：词源枯竭不拿文字打发，
-        # 降级硬池随机（真实 R18 硬池，非充数）并如实告知货不对板。
-        _alt = await _hard_pool_fallback()
-        if _alt:
+        else:
+            # 2026-11-12 22:40 用户定版：搜不到就如实说，不发不相关的图充数
             await image_search.finish(
-                MessageSegment.image(_alt)
-                + MessageSegment.text(f"「{query}」这词图库里确实没有存货，这幅是随机镇架之作。")
+                f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
             )
-            return
-        await image_search.finish(
-            f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
-        )
         return
 
     item = await fetch_lolicon(r18=1 if private else 0, tags=tags)
@@ -171,10 +161,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                 # 中文高频词先直译；其余交给 AI 翻译成 booru 英文标签
                 tbib_tags = _ZH_TAG_MAP.get(query)
                 if tbib_tags is None:
-                    bt = await translate_tags(query)
-                    if bt:
-                        tbib_tags = [t.strip() for t in bt.split(",") if t.strip()] or None
-                        tbib_tags = await _fix_tbib_tags(tbib_tags)
+                    tbib_tags = await _search_tag_candidates(query)
                 if tbib_tags:
                     _img = await fetch_tbib_bytes(tbib_tags)
                     if _img:
@@ -185,14 +172,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                     if _img:
                         await image_search.finish(MessageSegment.image(_img))
                         return
-                # 词源真枯竭 → 硬池随机+如实告知（2026-11-12 定版 100% 出图）
-                _alt = await _hard_pool_fallback()
-                if _alt:
-                    await image_search.finish(
-                        MessageSegment.image(_alt)
-                        + MessageSegment.text(f"「{query}」这词图库里确实没有存货，这幅是随机镇架之作。")
-                    )
-                    return
+                # 2026-11-12 22:40 用户定版：搜不到就如实说，不发不相关的图充数
                 await image_search.finish(
                     f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
                 )
@@ -246,10 +226,9 @@ _ZH_TAG_MAP = {
     # 女性向扩展
     "姨": ["milf", "1girl"], "阿姨": ["milf", "1girl"],
     "熟女": ["milf", "1girl"], "御姐": ["milf", "1girl"],
-    # 亲属称谓（2026-11-12：AI 翻译对奶奶/爷爷翻词不稳定导致搜空，
-    # 实测 tbib 库存 grandma 22 张 / grandfather 7 张——直写映射绕过 AI）
-    "奶奶": ["grandma"], "外婆": ["grandma"], "姥姥": ["grandma"],
-    "爷爷": ["grandfather"], "外公": ["grandfather"], "姥爷": ["grandfather"],
+    # 注：亲属词（奶奶/爷爷等）不走映射表——2026-11-12 22:40 起由
+    # _search_tag_candidates 智能链（AI候选词→图库目录反查→explicit库存排序）
+    # 通用解决，发现一个写一个的映射方式已废弃（用户定版：要智能不要白名单）
     # 王者荣耀（2026-11-05 实测：diaochan 无后缀标签被错标污染为宝可梦内容，禁用；
     # 精确标签 diaochan_(honor_of_kings) 全库仅 1 张全年龄图，聊胜于无）
     "王者荣耀": ["honor_of_kings"], "貂蝉": ["diaochan_(honor_of_kings)"],
@@ -586,6 +565,133 @@ AI_KEY = os.getenv("OPENAI_API_KEY", "")
 AI_URL = os.getenv("OPENAI_BASE_URL", "https://api.siliconflow.cn/v1")
 AI_MODEL = os.getenv("OPENAI_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 _TAG_CACHE: dict[str, str] = {}
+
+
+# ---------- 智能搜词链（2026-11-12 22:40 定版，替代"发现一个写一个"的映射法） ----------
+# 流程：中文词 → AI 出 ≤3 个朴素英文候选词（不要求是标签）→ 逐个到 tbib
+# 自动补全目录做"词元边界匹配"对齐成真实标签 → 按 explicit 实际库存排序。
+# 要点：不信任 AI 的具体用词（奶奶翻成 granny/grandma/grandmother 任何一个
+# 都能落到真标签上）；不信任标签总库存（只认 R18 实际库存）；词元黑名单
+# （son/boy 等）把族系复合标签的未成年风险挡在红线外。
+_CAND_CACHE: dict[str, list[str]] = {}
+_CAND_PROMPT = (
+    "你把中文搜索词翻译成二次元图库的英文检索词。"
+    "只输出英文，最多3个不同说法的候选，用逗号分隔，全小写，"
+    "用最朴素的常见英文单词或词组，不要自造复合词，不要解释。"
+)
+
+
+async def _translate_candidates(query: str) -> list[str]:
+    """中文词 → ≤3 个朴素英文候选词。失败返回 []，绝不抛错。"""
+    if query in _CAND_CACHE:
+        return _CAND_CACHE[query]
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                f"{AI_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {AI_KEY}"},
+                json={
+                    "model": AI_MODEL,
+                    "max_tokens": 60,
+                    "temperature": 0,
+                    # glm-4.7-flash+ 默认开深度思考，会把正文吃空——显式关闭
+                    "thinking": {"type": "disabled"},
+                    "messages": [
+                        {"role": "system", "content": _CAND_PROMPT},
+                        {"role": "user", "content": query},
+                    ],
+                },
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                data = await resp.json(content_type=None)
+        raw = data["choices"][0]["message"]["content"].strip().splitlines()[0]
+        cands = [t.strip().strip('"').lower() for t in raw.split(",")]
+        cands = [c for c in cands if c]
+        if cands:
+            _CAND_CACHE[query] = cands
+        return cands
+    except Exception:
+        return []
+
+
+# 词元黑名单：族系复合标签（xx_and_son 之类）可能带出未成年向内容——红线
+_TAG_PART_BLOCK = {"son", "grandson", "boy", "child", "kid", "loli", "shota",
+                   "teen", "young", "brother"}
+
+
+async def _tag_candidates_for(w: str) -> list[str]:
+    """候选词 → 图库真实标签 ≤2 个（按标签总库存降序）。
+    全词精确命中（库存≥3）直接用；否则全前缀探索目录 + 词元边界匹配
+    （标签的语义单元必须含候选词本身，排除 grandia/grandpaced 这类
+    同前缀杂讯）+ 词元黑名单。图库目录为准，不信 AI 用词。"""
+    import difflib
+    w = w.strip().lower().replace(" ", "_")
+    if not w or len(w) < 3:
+        return []
+    for name, cnt in await _tbib_tag_index(w):
+        if name == w and cnt >= 3:
+            return [name]
+    best: dict[str, int] = {}
+    prefix = w[:-1] if len(w) > 5 else w
+    while len(prefix) >= 4:
+        for name, cnt in await _tbib_tag_index(prefix):
+            if cnt < 3 or not name.startswith(prefix):
+                continue
+            parts = name.split("_")
+            if w not in parts and not name.startswith(w + "_") and not name.endswith("_" + w):
+                continue
+            if any(p in _TAG_PART_BLOCK for p in parts):
+                continue
+            if difflib.SequenceMatcher(None, w, name).ratio() >= 0.6:
+                best[name] = max(best.get(name, 0), cnt)
+        prefix = prefix[:-1]
+    return [n for n, _c in sorted(best.items(), key=lambda kv: -kv[1])[:2]]
+
+
+_EXPLICIT_CNT: dict[str, int] = {}
+
+
+async def _rank_by_explicit(tags: list[str]) -> list[str]:
+    """按 explicit 实际库存降序，零库存剔除——标签总数会骗人
+    （grandpa_gohan 总量 54 但 explicit 0），R18 库存不会。"""
+    import re as _re
+    scored: list[tuple[int, str]] = []
+    for t in tags:
+        if t in _EXPLICIT_CNT:
+            c = _EXPLICIT_CNT[t]
+        else:
+            c = 0
+            try:
+                async with aiohttp.ClientSession() as sess:
+                    async with sess.get(
+                        f"{TBIB_API}?page=dapi&s=post&q=index&limit=1"
+                        f"&tags=rating:explicit+{t}",
+                        timeout=aiohttp.ClientTimeout(total=10),
+                        headers={"User-Agent": _TBIB_UA},
+                    ) as resp:
+                        if resp.status == 200:
+                            m = _re.search(r'count="(\d+)"', await resp.text())
+                            c = int(m.group(1)) if m else 0
+            except Exception:
+                c = 0
+            _EXPLICIT_CNT[t] = c
+        if c > 0:
+            scored.append((c, t))
+    scored.sort(reverse=True)
+    return [t for _c, t in scored]
+
+
+async def _search_tag_candidates(query: str) -> list[str]:
+    """中文词 → 图库真实标签列表（explicit 库存降序）。智能搜词链主入口。"""
+    tags: list[str] = []
+    for w in await _translate_candidates(query):
+        for t in await _tag_candidates_for(w):
+            if t not in tags:
+                tags.append(t)
+    if not tags:
+        return []
+    return await _rank_by_explicit(tags[:6])
+
 
 _TRANSLATE_PROMPT = (
     "你把中文关键词翻译成 Danbooru/Safebooru 二次元图库的英文标签。"

@@ -145,8 +145,6 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
         if s.get("fee") != 1:
             try:
                 await song_cmd.send(MessageSegment.music("163", str(s["id"])))
-                card_note = ("点这张卡片去网易云音乐听完整版——切界面、锁屏都不会停，"
-                             "跟语音条是同一个音源。")
                 ne_card_done = True
             except Exception:
                 card_note = ""

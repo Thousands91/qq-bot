@@ -16,7 +16,7 @@ import aiohttp
 from ddgs import DDGS
 from nonebot import on_command
 from nonebot.params import CommandArg
-from nonebot.logger import logger
+from nonebot.log import logger
 from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,

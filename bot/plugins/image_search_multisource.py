@@ -347,10 +347,12 @@ async def fetch_hypnohub_bytes(tags: list[str] | None = None) -> bytes | None:
     url = (f"{HYPNO_API}?page=dapi&s=post&q=index&json=1&limit=100"
            f"&tags={tag_q}&pid=0")
     try:
+        # 2026-11-12 X10 实测 hypnohub 列表 15 秒超时（家宽到它不通），
+        # 收紧到 8 秒——tbib 空手后别让用户为死源干等
         async with aiohttp.ClientSession() as sess:
             async with sess.get(
                 url,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=8),
                 headers={"User-Agent": _TBIB_UA},
             ) as resp:
                 if resp.status != 200:
@@ -595,10 +597,11 @@ _CAND_PROMPT = (
 
 
 async def _ai_post(payload: dict, what: str) -> str:
-    """调 AI 接口统一入口：20 秒超时 + 429 限流递增退避重试(最多4次) + 必打日志。
-    （2026-11-12 实锤：X10 到智谱偶发读超时 + 晚高峰 429 限流实测 3拒1成
-    且存在 4 连挂的持续窗口，5 次退避约 40 秒——成功结果有永久缓存，
-    同词第二次秒出。原 10 秒超时+静默吞异常导致翻译链无声死亡——坑93 重演）"""
+    """调 AI 接口统一入口：20 秒超时 + 全形态防御 + 递增退避重试(最多5次)。
+    （2026-11-12 晚高峰实锤：智谱限流有多种形态——HTTP 429+error体、
+    以及 status 正常但 body 无 choices 的错误体（KeyError 静默死亡）。
+    本版不看 status 赌形态：直接验 body 有没有 choices，任何异常形态
+    都把 status+body 片段打进日志并退避重试——坑93 零反馈教训。）"""
     for i in range(5):
         try:
             async with aiohttp.ClientSession() as sess:
@@ -608,19 +611,19 @@ async def _ai_post(payload: dict, what: str) -> str:
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as resp:
-                    if resp.status == 429:
-                        logger.warning(
-                            f"[搜图]AI限流429({what})第{i + 1}次,退避重试"
-                        )
-                        await asyncio.sleep(3 + 3 * i)
-                        continue
+                    st = resp.status
                     data = await resp.json(content_type=None)
-                return str(data["choices"][0]["message"]["content"]).strip()
+                if isinstance(data, dict) and data.get("choices"):
+                    return str(data["choices"][0]["message"]["content"]).strip()
+                logger.warning(
+                    f"[搜图]AI响应异常({what})第{i + 1}次 status={st} "
+                    f"body={str(data)[:150]}"
+                )
         except Exception as e:
             logger.warning(
                 f"[搜图]AI调用失败({what})第{i + 1}次: {type(e).__name__} {e}"
             )
-            await asyncio.sleep(2)
+        await asyncio.sleep(3 + 3 * i)
     return ""
 
 

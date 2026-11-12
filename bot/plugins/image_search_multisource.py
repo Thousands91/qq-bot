@@ -116,6 +116,12 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
             await image_search.finish(
                 f"「{query}」这几册您都翻过了，画师尚未落新笔——改日再来，或有新货。"
             )
+        elif tbib_tags is None:
+            # AI 翻译通道挂了（限流/超时）——如实说暂时查不了，
+            # 不说"图库里没有"（奶奶明明有货，假话比不回更伤信任）
+            await image_search.finish(
+                f"「{query}」的译名这会儿查不动——词库先生告假了。稍候片刻再来问，兴许就有货。"
+            )
         else:
             # 2026-11-12 22:40 用户定版：搜不到就如实说，不发不相关的图充数
             await image_search.finish(
@@ -173,6 +179,12 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                     if _img:
                         await image_search.finish(MessageSegment.image(_img))
                         return
+                if tbib_tags is None:
+                    # AI 翻译通道挂了——如实说暂时查不了，不说"没有"
+                    await image_search.finish(
+                        f"「{query}」的译名这会儿查不动——词库先生告假了。稍候片刻再来问，兴许就有货。"
+                    )
+                    return
                 # 2026-11-12 22:40 用户定版：搜不到就如实说，不发不相关的图充数
                 await image_search.finish(
                     f"「{query}」的风月册页，图库里未曾收录。冷门的作品，画师们不轻易落笔——换位热门角色，兴许有货。"
@@ -584,10 +596,10 @@ _CAND_PROMPT = (
 
 async def _ai_post(payload: dict, what: str) -> str:
     """调 AI 接口统一入口：20 秒超时 + 429 限流递增退避重试(最多4次) + 必打日志。
-    （2026-11-12 实锤：X10 到智谱偶发读超时 + 晚高峰 429 限流实测 3拒1成，
-    原 10 秒超时+静默吞异常导致翻译链无声死亡，用户搜"奶奶"只见搜空文案
-    毫无排查线索——坑93 重演。成功结果有缓存，重试只发生在首次。）"""
-    for i in range(4):
+    （2026-11-12 实锤：X10 到智谱偶发读超时 + 晚高峰 429 限流实测 3拒1成
+    且存在 4 连挂的持续窗口，5 次退避约 40 秒——成功结果有永久缓存，
+    同词第二次秒出。原 10 秒超时+静默吞异常导致翻译链无声死亡——坑93 重演）"""
+    for i in range(5):
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.post(
@@ -706,10 +718,15 @@ async def _rank_by_explicit(tags: list[str]) -> list[str]:
     return [t for _c, t in scored]
 
 
-async def _search_tag_candidates(query: str) -> list[str]:
-    """中文词 → 图库真实标签列表（explicit 库存降序）。智能搜词链主入口。"""
+async def _search_tag_candidates(query: str) -> list[str] | None:
+    """中文词 → 图库真实标签列表（explicit 库存降序）。
+    返回 None 表示 AI 翻译通道挂了（限流/超时），查询根本没执行——
+    调用方据此说"暂时查不了"而不是"图库里没有"（假话比不回更伤信任）。"""
+    cands = await _translate_candidates(query)
+    if not cands:
+        return None
     tags: list[str] = []
-    for w in await _translate_candidates(query):
+    for w in cands:
         for t in await _tag_candidates_for(w):
             if t not in tags:
                 tags.append(t)

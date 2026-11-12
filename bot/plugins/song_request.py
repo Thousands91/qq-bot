@@ -326,7 +326,9 @@ def usable(s: dict, keyword: str) -> bool:
 
 async def fetch_audio(song_id: int):
     """返回 (音频 bytes 或 None, 时长秒, 错误说明)"""
-    url = f"{STREAM}?type=url&id={song_id}"
+    # 2026-11-12：上游 meting 接口行为变更——不带 server 参数返回 200 空体，
+    # 必须显式 server=netease（歌源全是网易云搜索，恒定 netease）。缺它=语音全灭。
+    url = f"{STREAM}?type=url&server=netease&id={song_id}"
     try:
         async with aiohttp.ClientSession(headers={"User-Agent": UA}) as sess:
             async with sess.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:

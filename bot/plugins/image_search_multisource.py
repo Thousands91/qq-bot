@@ -121,7 +121,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
             # AI 翻译通道挂了（限流/超时）——如实说暂时查不了，
             # 不说"图库里没有"（奶奶明明有货，假话比不回更伤信任）
             await image_search.finish(
-                f"「{query}」的译名这会儿查不动——词库先生告假了。稍候片刻再来问，兴许就有货。"
+                f"「{query}」的风月册页这会儿翻不动——词库先生告假了，稍候片刻再来问，兴许就有货。"
             )
         else:
             # 2026-11-12 22:40 用户定版：搜不到就如实说，不发不相关的图充数
@@ -183,7 +183,7 @@ async def _(event: GroupMessageEvent | PrivateMessageEvent, arg: Message = Comma
                 if tbib_tags is None:
                     # AI 翻译通道挂了——如实说暂时查不了，不说"没有"
                     await image_search.finish(
-                        f"「{query}」的译名这会儿查不动——词库先生告假了。稍候片刻再来问，兴许就有货。"
+                        f"「{query}」的风月册页这会儿翻不动——词库先生告假了，稍候片刻再来问，兴许就有货。"
                     )
                     return
                 # 2026-11-12 22:40 用户定版：搜不到就如实说，不发不相关的图充数

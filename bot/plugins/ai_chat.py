@@ -16,7 +16,7 @@ import re
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Deque, Dict, List
+from typing import Deque, Dict, List, Tuple
 
 from nonebot import on_message
 from nonebot.log import logger
@@ -272,6 +272,7 @@ get_driver().on_startup(_start_qface_refresh)  # 启动后异步刷新全量表
 # summary 缺失时兜底：下载表情图 → 免费视觉模型一句话识别 → 按表情 id
 # 永久缓存（同一表情全库只识别一次，之后零成本秒出），失败才落"表情包"。
 import base64 as _b64
+import hashlib as _hashlib
 
 _MFACE_CACHE_FILE = Path(__file__).parent.parent / "data" / "mface_names.json"
 _MFACE_NAMES: Dict[str, str] = {}
@@ -366,6 +367,64 @@ async def _mface_backfill(d) -> None:
         pass  # 失败不卡死；该表情下次出现会自动再试
     finally:
         _KICKED_MFACE.discard(key)
+
+
+# ---------- 相册图片型表情包识别（2026-11-12：用户报告"表情识别不了"） ----------
+# QQ 相册转发的表情包走 image 段：无 summary、无 mface key，此前被直接忽略——
+# 模型收不到任何信号，只能回"我在。您有什么要说给我听？"兜底。
+# 方案：下载图 → 内容 md5 查缓存 → 命中秒出名字；未命中给占位 + 后台视觉识别
+# 写永久缓存（同一张表情包全库只识别一次）。下载超时 6 秒，失败绝不拖死回复。
+_IMG_CAP_FILE = Path(__file__).parent.parent / "data" / "image_captions.json"
+_IMG_CAPS: Dict[str, str] = {}
+_IMG_CAP_LOADED = False
+_IMG_CAP_KICKED: set = set()
+
+
+def _load_img_caps() -> None:
+    global _IMG_CAPS, _IMG_CAP_LOADED
+    _IMG_CAP_LOADED = True
+    try:
+        if _IMG_CAP_FILE.exists():
+            _IMG_CAPS = {str(k): str(v) for k, v in
+                         _json.loads(_IMG_CAP_FILE.read_text(encoding="utf-8")).items()}
+    except Exception:
+        pass
+
+
+async def _image_sticker_name(url: str) -> str:
+    """image 段 → 识别名。缓存命中出真名；未命中出占位并踢后台识别。"""
+    try:
+        import httpx  # nonebot 自带依赖
+        async with httpx.AsyncClient(timeout=6, follow_redirects=True) as cli:
+            r = await cli.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200 or not (100 < len(r.content) <= 5 * 1024 * 1024):
+            return "表情包"
+        key = _hashlib.md5(r.content).hexdigest()
+        if not _IMG_CAP_LOADED:
+            _load_img_caps()
+        cap = _IMG_CAPS.get(key)
+        if cap:
+            return cap
+        if key not in _IMG_CAP_KICKED:
+            _IMG_CAP_KICKED.add(key)
+
+            async def _bf(data: bytes = r.content) -> None:
+                try:
+                    c = await _vlm_caption(data)
+                    if c:
+                        _IMG_CAPS[key] = c
+                        _IMG_CAP_FILE.write_text(
+                            _json.dumps(_IMG_CAPS, ensure_ascii=False), encoding="utf-8")
+                        logger.info(f"[图片表情识别] {key[:8]} → {c}")
+                except Exception:
+                    pass  # 失败不卡死；该图下次出现自动再试
+                finally:
+                    _IMG_CAP_KICKED.discard(key)
+
+            asyncio.get_running_loop().create_task(_bf())
+        return "表情包"
+    except Exception:
+        return "表情包"
 
 
 # ---------- 语音转文字（2026-11-07 新增：给阿萨尔装"耳朵"） ----------
@@ -476,14 +535,35 @@ async def _voice_to_text(d: dict, bot=None) -> str:
         _VOICE_KICKED.discard(fid)
 
 
+# 同一条消息的提取结果记忆化：消息处理链里 _extract_text 会被调用多达 4 次，
+# 每次都重新下载图片/转写语音既慢又重复计费——按 (user_id, message_id) 缓存。
+_EXTRACT_MEMO: Dict[Tuple[int, int], str] = {}
+
+
+def _extract_memo_store(event, text: str) -> None:
+    try:
+        if len(_EXTRACT_MEMO) > 60:
+            _EXTRACT_MEMO.clear()
+        _EXTRACT_MEMO[(event.user_id, getattr(event, "message_id", 0) or 0)] = text
+    except Exception:
+        pass
+
+
 async def _extract_text(event, bot=None) -> str:
     """纯文本 + 表情标记。
 
     text 段原样保留；face 段转 [表情:名]；mface（商城/大表情）转
-    [表情包:summary]，summary 缺失时走视觉识别补描述（见上）。
-    其余段（image/at/record…）不展开，保持与 get_plaintext 相同的
-    语义。任何一段取异常都跳过，绝不抛错。
+    [表情包:summary]，summary 缺失时走视觉识别补描述（见上）；
+    image 段（相册表情包）转 [表情包:识别名]，同上走视觉识别。
+    任何一段取异常都跳过，绝不抛错。
     """
+    try:
+        _mk = (event.user_id, getattr(event, "message_id", 0) or 0)
+        _hit = _EXTRACT_MEMO.get(_mk)
+        if _hit is not None:
+            return _hit
+    except Exception:
+        pass
     parts = []
     try:
         for seg in event.message:
@@ -525,9 +605,18 @@ async def _extract_text(event, bot=None) -> str:
                 # 语音：转写成功当正文用；失败给标记让模型用话接住（"声音糊了"）
                 vtxt = await _voice_to_text(d, bot)
                 parts.append(vtxt if vtxt else "[语音:没听清]")
+            elif t == "image":
+                # 相册图片型表情包：md5 缓存 + 视觉识别（2026-11-12，见 _image_sticker_name）
+                _iu = str(d.get("url") or d.get("file") or "")
+                if _iu.startswith("http"):
+                    parts.append(f"[表情包:{await _image_sticker_name(_iu)}]")
     except Exception:
-        return event.get_plaintext().strip()
-    return "".join(parts).strip()
+        text = event.get_plaintext().strip()
+        _extract_memo_store(event, text)
+        return text
+    text = "".join(parts).strip()
+    _extract_memo_store(event, text)
+    return text
 
 
 async def _memory_biography(uid: int) -> str:

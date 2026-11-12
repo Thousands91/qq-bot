@@ -76,6 +76,10 @@ _MEMORY_SKIP = _re_mod.compile(
     r"^(国际象棋|走 |认输|结束棋局|清空记忆|重置记忆|忘了我|菜单|天气|点歌|抽签|找书|新闻|看图|看景|/|!|！)"
 )
 _MEMORY_MIN_LEN = 4
+# 坑91（2026-11-12）：纯表情/动作标记的消息（如"[表情:比爱心]"）不配当记忆条目——
+# 它们会被 _memory_block 注入后续每轮对话，模型把"比爱心"表情当真动作反复接戏，
+# 幻觉出"比心/手掌/掀屋顶"等动作叙事自我循环。锚定 ^...$：带正文的消息不受影响。
+_PURE_MARKER = _re_mod.compile(r"^\[(?:表情|表情包|动作)[^\]]*\]$")
 
 
 def _memory_path(uid: int) -> Path:
@@ -84,9 +88,11 @@ def _memory_path(uid: int) -> Path:
 
 def _load_memory(uid: int) -> list:
     try:
-        return _json.loads(_memory_path(uid).read_text(encoding="utf-8"))
+        raw = _json.loads(_memory_path(uid).read_text(encoding="utf-8"))
     except Exception:
         return []
+    # 坑91：加载时滤掉历史遗留的纯表情条目，旧档案自动自愈，不用手工清数据
+    return [e for e in raw if not _PURE_MARKER.match(e.get("m", ""))]
 
 
 def _save_memory(uid: int, entries: list) -> None:
@@ -590,6 +596,9 @@ def _remember(uid: int, text: str, reply: str = "") -> None:
     """
     text = text.strip()
     if len(text) < _MEMORY_MIN_LEN or _MEMORY_SKIP.search(text):
+        return
+    # 坑91：纯表情消息不写入记忆（表情不是"他说过的话"）
+    if _PURE_MARKER.match(text):
         return
     entries = _load_memory(uid)
     if entries and entries[-1].get("m") == text:

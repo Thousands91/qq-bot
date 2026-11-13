@@ -1923,7 +1923,10 @@ def _needs_fact(text: str) -> bool:
     这些答案就在人设里，模型自己知道。去搜反而会把答对的改成"说不准"。
     """
     t = text.strip()
-    if len(t) < 5:
+    # 坑103：原门槛 len<5 一刀切——"齐豫是谁"只有4个字，搜索从未触发过，
+    # 模型只会人设发挥"正在查找，藏书窖里的书很多，可能得几天"（永远不会回来汇报）。
+    # 改为：短句只要带强事实特征（是谁/叫什么/哪年…）就放行；纯闲聊另有 _CHITCHAT_RE 拦。
+    if len(t) < 5 and not _FACT_RE.search(t):
         return False
     if _CHITCHAT_RE.search(t):
         return False

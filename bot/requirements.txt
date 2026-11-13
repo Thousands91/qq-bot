@@ -23,3 +23,12 @@ python-chess>=1.10
 
 # 实拍图搜索（DuckDuckGo）
 ddgs>=9.0
+
+# === 坑102补录（2026-11-13全面对账）：以下三个代码在用但清单漏写 ===
+# 坑101教训：venv重建按requirements装，漏写的包就静默失效，不炸进程
+# 棋盘/签卡画图(chess_game.py、fortune.py) —— 11-11重建后靠残存环境侥幸活着
+Pillow>=10.0
+# 联网搜索抓取(ai_chat.py _web_snippets) —— 11-11重建后丢失，11-13才抓出来
+requests>=2.31
+# 语音离线识别兜底(ai_chat.py _load_local_rec，模型在/root/asr_model)
+sherpa-onnx>=1.10.30

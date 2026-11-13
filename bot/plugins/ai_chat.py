@@ -31,7 +31,7 @@ try:
 except ImportError:
     AZAR_PERSONA = "你扮演《苏丹的游戏》书店老板阿萨尔，博学、矜持、说话文雅简短。"
 
-_DUP: Dict[tuple, float] = {}
+_DUP: Dict[tuple, list] = {}  # (群,人,话) -> [上次时间, 上次是否答成]
 
 # ===== 闭嘴开关（防两台机器人互@刹不住车）=====
 # 用户对阿萨尔说"停止/别回了"→ 锁定互怼对象并进入静音；说"继续"提前解除。
@@ -1331,15 +1331,18 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         return
 
     text = await _extract_text(event, bot)  # 含表情标记
-    # 同一句话 60 秒内只回一次（防手滑连发/风控重发导致复读）
+    # 同一句话间隔拦截（坑104，2026-11-13）：重复分两种——
+    # 手滑连发/风控重发（拦）和真重问（必须答）。判据=上次答成没答成：
+    # 答成了，30 秒内同句拦（防复读）；答砸了（超时/异常），只压 10 秒，
+    # 10 秒后重发就是重试信号，放行重新走全流程（含联网搜索）。
     import time as _time
     _dupkey = (getattr(event, "group_id", 0), event.user_id, text)
     _last = _DUP.get(_dupkey)
     _now = _time.time()
-    if text and _last and _now - _last < 60:
+    if text and _last and _now - _last[0] < (30 if _last[1] else 10):
         return
     if text:
-        _DUP[_dupkey] = _now
+        _DUP[_dupkey] = [_now, True]
     # ===== 积压过滤（坑72，2026-11-09）：旧消息不回 =====
     # NapCat 断线重连/网络恢复后会把积压的旧消息一次性吐进来，逐条作答=
     # 拿着几分钟前的语境回话（"答非所问"元凶之一，11-08晚实锤）。
@@ -1541,7 +1544,14 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     try:
         answer = await call_llm(to_model, extra_system=extra_sys)
     except Exception as e:
-        await ai_chat.finish(_with_quote(event, Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络")))
+        # 坑104：答砸了要记下来——短时间内用户重发同句是重试信号，得放行
+        if _dupkey in _DUP:
+            _DUP[_dupkey][1] = False
+        # 技术报错（APITimeoutError 之类）只进日志，不进聊天——用户看到只会更懵
+        logger.error(f"[灯灭] call_llm 异常: {type(e).__name__}: {e}")
+        await ai_chat.finish(_with_quote(event, Message(
+            "（书页翻到一半，灯灭了）风把灯芯晃了一下……稍候片刻再唤我一声，我重念。"
+        )))
         return
 
     # 表情回复的程序侧验收（坑55b）：prompt 三令五申压不住小模型的部分，代码来兜。

@@ -2139,15 +2139,19 @@ async def call_llm(messages: List[dict], extra_system: str = "") -> str:
     # 延迟红线（2026-11-05 晚高峰实锤：无超时上限时 APITimeoutError 挂到用户
     # 侧等半分钟+）：单次请求 20s 硬超时、主模型只重试 1 次，仍失败降级
     # glm-4-flash 保底。全链最坏 ~60s 封顶，不再无限吊着。
+    # 2026-11-13 14:40 提速定版（实测一条聊天 45~79s，全是白等）：
+    # ①主力 max_retries 1→0——SDK 内部重试一次等于 4.7 白等双份超时；
+    # ②单模型超时 20→8s——下午 4.7/4.5 频繁限流+超时，20s 白等拖出 79s 极端值。
+    # 降级链模型顺序不动（质量优先），全链最坏 8+8+8=24s 封顶。
     _FB_REMIND = (
         "（用更简单的中文说话。铁律：① 绝不说「您的提问/智慧/求知欲如同…」"
         "这类比喻夸奖；② 结尾不许挂emoji；③ 称呼按对方要求来；④ 全程只说一两句，"
         "像市集里聊天的书商，不像写贺卡的。）"
     )
     client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL,
-                         max_retries=1, timeout=20.0)
+                         max_retries=0, timeout=8.0)
     client_fb = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL,
-                            max_retries=0, timeout=20.0)
+                            max_retries=0, timeout=8.0)
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     if extra_system:
         # 内部备忘放在末尾的 system 层，模型只参考不复述

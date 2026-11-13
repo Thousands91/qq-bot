@@ -1547,11 +1547,9 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         # 坑104：答砸了要记下来——短时间内用户重发同句是重试信号，得放行
         if _dupkey in _DUP:
             _DUP[_dupkey][1] = False
-        # 技术报错（APITimeoutError 之类）只进日志，不进聊天——用户看到只会更懵
+        # 报错文案保留技术细节是用户拍板的（2026-11-13 17:53 再次确认），别再改人话版
         logger.error(f"[灯灭] call_llm 异常: {type(e).__name__}: {e}")
-        await ai_chat.finish(_with_quote(event, Message(
-            "（书页翻到一半，灯灭了）风把灯芯晃了一下……稍候片刻再唤我一声，我重念。"
-        )))
+        await ai_chat.finish(_with_quote(event, Message(f"（书页翻到一半，灯灭了）{type(e).__name__}\n请检查 API Key 或网络")))
         return
 
     # 表情回复的程序侧验收（坑55b）：prompt 三令五申压不住小模型的部分，代码来兜。
@@ -1585,11 +1583,14 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 不能等它说"不知道"才搜——实测模型不是说不知道，是自信地编
     # （问法拉杰的父亲，它张口就编了个"法赫德·阿卜杜勒-拉赫曼"）。
     # 判定必须用用户的原始话：text 里已经拼了记忆块和引用前缀，拿它判断会误判。
+    # 坑105：追问式事实题（"详细一点介绍齐豫"）不含是谁/哪年等特征词，
+    # 挂接 _fact_query：15 分钟内刚问过事实题的，追问也接上搜索，查询词沿用上次。
     _ask = await _extract_text(event, bot) or text
-    if _needs_fact(_ask) and not _is_self_inquiry(_ask):
+    _fq = _fact_query(_ask, getattr(event, "user_id", 0))
+    if _fq and not _is_self_inquiry(_ask):
         try:
             snippets = await asyncio.wait_for(
-                asyncio.to_thread(_web_snippets, _ask), timeout=14
+                asyncio.to_thread(_web_snippets, _fq), timeout=16
             )
         except Exception as e:
             snippets = ""
@@ -1926,6 +1927,26 @@ def _lore_correction(text: str) -> str:
     return ""
 
 
+# 坑105：追问式事实题——"详细一点介绍齐豫""展开讲讲"本身不带是谁/哪年特征，
+# 但紧接着上一轮的事实题，该接着搜。记录每人最近一次事实题查询，15 分钟内的追问沿用。
+_FOLLOWUP_RE = __import__("re").compile(r"介绍|详细|讲讲|展开|多说|再说说|继续说|到底什?么来着")
+_LAST_FACT_Q: Dict[int, list] = {}  # uid -> [查询词, 时间戳]
+
+
+def _fact_query(text: str, uid: int) -> str | None:
+    """返回本次该拿去搜的查询词；None=不搜。顺手记录事实题查询供追问接力。"""
+    t = (text or "").strip()
+    if _needs_fact(t):
+        _LAST_FACT_Q[uid] = [t, _time.time()]
+        return t
+    if _FOLLOWUP_RE.search(t):
+        rec = _LAST_FACT_Q.get(uid)
+        if rec and _time.time() - rec[1] < 900:
+            rec[1] = _time.time()  # 连环追问也续期
+            return rec[0]
+    return None
+
+
 def _needs_fact(text: str) -> bool:
     """判断这句是不是在问可以查证的客观事实（而不是闲聊/买卖/情绪）。
 
@@ -1987,7 +2008,7 @@ def _scrape_sogou(q: str):
     import requests as _rq
 
     r = _rq.get("https://www.sogou.com/web", params={"query": q},
-                headers=_SCRAPE_HEADERS, timeout=10)
+                headers=_SCRAPE_HEADERS, timeout=8)
     r.encoding = "utf-8"
     html = r.text
     if any(w in html for w in _BLOCK_WORDS):
@@ -2012,7 +2033,7 @@ def _scrape_baidu(q: str):
     import requests as _rq
 
     r = _rq.get("https://www.baidu.com/s", params={"wd": q},
-                headers=_SCRAPE_HEADERS, timeout=10)
+                headers=_SCRAPE_HEADERS, timeout=6)
     r.encoding = "utf-8"
     html = r.text
     if any(w in html for w in _BLOCK_WORDS):

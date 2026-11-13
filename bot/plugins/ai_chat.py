@@ -1542,7 +1542,13 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # finish() 是靠抛 FinishedException 结束的，不能包在 try 里，
     # 否则会被下面的 except 截下来再补一句"灯灭了"。
     try:
-        answer = await call_llm(to_model, extra_system=extra_sys)
+        answer = await call_llm(to_model, extra_system=extra_sys + _SEARCH_TAG_HINT)
+        # 坑106：要不要联网，不靠死词表硬猜——模型自己最清楚自己知不知道。
+        # 它拿不准就在答案开头申报【搜:查询词】，代码据此搜索；标记剥掉，用户看不见。
+        _tag = _SEARCH_TAG_RE.match(answer or "")
+        _forced_q = _tag.group(1).strip() if _tag else None
+        if _tag:
+            answer = answer[_tag.end():].strip()
     except Exception as e:
         # 坑104：答砸了要记下来——短时间内用户重发同句是重试信号，得放行
         if _dupkey in _DUP:
@@ -1586,7 +1592,14 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
     # 坑105：追问式事实题（"详细一点介绍齐豫"）不含是谁/哪年等特征词，
     # 挂接 _fact_query：15 分钟内刚问过事实题的，追问也接上搜索，查询词沿用上次。
     _ask = await _extract_text(event, bot) or text
-    _fq = _fact_query(_ask, getattr(event, "user_id", 0))
+    # 模型自报的搜词也要过人设闸：阿萨尔世界的人事（法拉杰/苏丹卡…）答案在人设里，
+    # 模型装不知道乱标【搜:】会搜出一堆无关现实结果把人设搅浑
+    if _forced_q and _IN_LORE_RE.search(_ask):
+        logger.info(f"[联网] 模型自报搜词但属人设内话题，忽略：{_forced_q}")
+        _forced_q = None
+    _fq = _forced_q or _fact_query(_ask, getattr(event, "user_id", 0))
+    if _forced_q:
+        logger.info(f"[联网] 模型自报搜词：{_forced_q}")
     if _fq and not _is_self_inquiry(_ask):
         try:
             snippets = await asyncio.wait_for(
@@ -1931,6 +1944,20 @@ def _lore_correction(text: str) -> str:
 # 但紧接着上一轮的事实题，该接着搜。记录每人最近一次事实题查询，15 分钟内的追问沿用。
 _FOLLOWUP_RE = __import__("re").compile(r"介绍|详细|讲讲|展开|多说|再说说|继续说|到底什?么来着")
 _LAST_FACT_Q: Dict[int, list] = {}  # uid -> [查询词, 时间戳]
+
+# 坑106：搜不搜的第一道判据交给模型自报——它对现实世界知识"拿没拿准"自己最清楚，
+# 死词表（是谁/哪年…）永远追不上真实问法，漏一个就得改一次代码。
+# 模型拿不准就在答案开头申报【搜:查询词】，代码剥掉标记后按词搜索；
+# 白名单 _fact_query 保留当快路和兜底（小模型漏标时词表还能接住）。
+_SEARCH_TAG_RE = __import__("re").compile(r"^【\s*搜\s*[:：]\s*(.{1,30}?)\s*】\s*")
+_SEARCH_TAG_HINT = (
+    "\n内部备忘（绝不复述本段，也别对任何人提起）：\n"
+    "若这句在问现实世界的事而你拿不准（人名、歌、书、影视剧、地方、"
+    "年头、新闻这类），在答案最前面输出【搜:查询词】再另起一行正常回答，"
+    "查询词挑最利于搜索的写法；\n"
+    "阿萨尔这个世界里的人与事、你确定无误的事、闲聊寒暄情绪表达，"
+    "一律不要输出该标记。"
+)
 
 
 def _fact_query(text: str, uid: int) -> str | None:

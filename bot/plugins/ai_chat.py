@@ -1611,8 +1611,13 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
         if snippets:
             logger.info(f"[联网] 「{_ask[:24]}」检索到线索，重答一次")
             try:
+                # 坑106续：重答绝不带对话历史——18:39实锤，历史里它刚说过"书上没记"，
+                # 人设惯性压过线索备忘，拿着"中国台湾女歌手"的真线索答出"外乡人的名字"。
+                # 只留人设 system（语气锚）+ 本句，上下文干净它就照线索答（18:24 测试验证）。
+                _sys_only = [m for m in to_model if m.get("role") == "system"]
+                _retry_msgs = _sys_only + [{"role": "user", "content": _ask}]
                 retry = await call_llm(
-                    to_model,
+                    _retry_msgs,
                     extra_system=extra_sys + "\n" + (
                         "内部备忘（绝不复述本段，也别提'搜索'、'查资料'这类字眼）：\n"
                         "以下是网上查到的线索，按相关度排好序。请直接采用第一条里的事实来回答，"
@@ -1621,6 +1626,18 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, state: T_S
                         f"{snippets}"
                     ),
                 )
+                # 代码验收：重答里还冒出"书上没记/册子"这类躲避话术=线索被惯性污染，
+                # 换干净上下文再给一次机会；还不行就认了（至少试过两回）。
+                if retry and _DODGE_RE.search(retry):
+                    logger.warning(f"[联网] 重答被历史惯性污染，重试：{retry[:30]}")
+                    retry2 = await call_llm(
+                        _retry_msgs,
+                        extra_system="内部备忘（绝不复述）：你刚才那句在装不知道，"
+                                     f"但其实网上查到了确凿线索，必须采用：\n{snippets}\n"
+                                     "用阿萨尔的口吻，把线索里的事实说进回答里，一句就够。",
+                    )
+                    if retry2 and not _DODGE_RE.search(retry2):
+                        retry = retry2
                 if retry:
                     answer = retry
             except Exception:

@@ -218,6 +218,25 @@ def probe(sec: int, size: int, result: str, err: str) -> None:
         pass
 
 
+async def _song_pic(song_id: int) -> str:
+    """搜索接口的封面字段（album.picUrl）经常是空的，meting 的 song
+    接口稳定带 pic。NapCat 自定义卡片 image 是必填，缺了整卡被拒
+    （实测报"自定义音乐卡片缺少必需参数: image"）。
+    """
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": UA}) as sess:
+            async with sess.get(
+                f"{STREAM}?type=song&server=netease&id={song_id}",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                d = await r.json(content_type=None)
+        if isinstance(d, list):
+            d = d[0] if d else {}
+        return (d or {}).get("pic") or ""
+    except Exception:
+        return ""
+
+
 async def send_custom_card(s: dict) -> bool:
     """坑107兜底：官方模板卡（163/qq）要过外部签名服务，公益签名服务一挂
     卡片就全军覆没（实测 2026-11-14 四个已知签名地址全不通）。自定义卡片
@@ -225,13 +244,16 @@ async def send_custom_card(s: dict) -> bool:
     网易云页面链接 + meting 音频外链 + 封面 + 歌名。
     用户已拍板不发附带说明句（坑98文案定版），所以成功即静默。
     """
+    pic = s.get("pic") or await _song_pic(s["id"])
+    if not pic:
+        return False  # NapCat 硬性要求 image，拿不到封面就别硬发
     try:
         await song_cmd.send(MessageSegment.music_custom(
             url=f"https://music.163.com/song?id={s['id']}",
             audio=f"{STREAM}?type=url&server=netease&id={s['id']}",
             title=f"{s['name']} - {s['artists'] or '佚名'}",
             content=s.get("album") or None,
-            img_url=s.get("pic") or None,
+            img_url=pic,
         ))
         return True
     except Exception:

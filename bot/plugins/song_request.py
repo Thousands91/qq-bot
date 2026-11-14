@@ -164,9 +164,12 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
                         card_note = ("点这张卡片去 QQ 音乐听——切界面、锁屏都不会停。")
                 except Exception:
                     card_note = ""
-        # 坑107：官方模板卡全灭（签名服务挂）→ 自定义卡片兜底，不走签名
+        # 坑107终局：发卡走本地签名代理（验config.token），上游公益签名服务
+        # 全灭时代理返回400、发卡失败——这里接文字卡兜底，点歌体验不断；
+        # 上游复活时真卡自动回来，无需人工干预
         if not ne_card_done and not card_note:
-            await send_custom_card(s)
+            if not await send_custom_card(s):
+                await song_cmd.send(Message(build_card(s)))
 
         try:
             # 长音频发过去要等 NapCat 转 silk 再上传，默认 30 秒的 api_timeout

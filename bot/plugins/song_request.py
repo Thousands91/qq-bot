@@ -164,6 +164,9 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
                         card_note = ("点这张卡片去 QQ 音乐听——切界面、锁屏都不会停。")
                 except Exception:
                     card_note = ""
+        # 坑107：官方模板卡全灭（签名服务挂）→ 自定义卡片兜底，不走签名
+        if not ne_card_done and not card_note:
+            await send_custom_card(s)
 
         try:
             # 长音频发过去要等 NapCat 转 silk 再上传，默认 30 秒的 api_timeout
@@ -213,6 +216,26 @@ def probe(sec: int, size: int, result: str, err: str) -> None:
                     f"{size // 1024}KB\t{result}\t{err}\n")
     except Exception:
         pass
+
+
+async def send_custom_card(s: dict) -> bool:
+    """坑107兜底：官方模板卡（163/qq）要过外部签名服务，公益签名服务一挂
+    卡片就全军覆没（实测 2026-11-14 四个已知签名地址全不通）。自定义卡片
+    用自己拼的 ark 结构，NapCat 直接发、不走签名服务，材料全是现成的：
+    网易云页面链接 + meting 音频外链 + 封面 + 歌名。
+    用户已拍板不发附带说明句（坑98文案定版），所以成功即静默。
+    """
+    try:
+        await song_cmd.send(MessageSegment.music_custom(
+            url=f"https://music.163.com/song?id={s['id']}",
+            audio=f"{STREAM}?type=url&server=netease&id={s['id']}",
+            title=f"{s['name']} - {s['artists'] or '佚名'}",
+            content=s.get("album") or None,
+            img_url=s.get("pic") or None,
+        ))
+        return True
+    except Exception:
+        return False
 
 
 async def qq_card_mid(keyword: str):
@@ -278,6 +301,7 @@ async def search(keyword: str) -> list:
                 "name": s.get("name", ""),
                 "artists": "/".join(a.get("name", "") for a in (s.get("artists") or [])),
                 "album": (s.get("album") or {}).get("name", ""),
+                "pic": (s.get("album") or {}).get("picUrl", ""),
                 "sec": int((s.get("duration") or 0) // 1000),
                 "fee": s.get("fee", 0),
             })

@@ -172,7 +172,8 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
 
 async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEvent,
                   kw: str, songs: list, force_file: bool,
-                  audio: bytes | None = None, sec: int | None = None) -> None:
+                  audio: bytes | None = None, sec: int | None = None,
+                  orig: dict | None = None) -> None:
     """从 songs[0] 起按顺序试，取第一个真能拿到音频的发出去。
 
     「点歌」直发（旧入口）与「序号选择」（坑111）两个入口共用；
@@ -180,6 +181,9 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
     _timeout 余量、finish 结束语义都保持原样。
     audio/sec：调用方已取好的音频（坑114跨平台找补场景），传了就
     不再按条目取，直接发送 songs[0]。
+    orig：跨平台找补时的原曲条目（坑118外篇：原曲网易云免费就优先
+    发官方163卡——官方卡只是个链接，不需要音频；文件过大只挡语音
+    条，不挡卡。用户拍板"能走官方卡就直接走"）。
     """
     # 同名歌很多，按顺序试，取第一个真能拿到音频的（仅直发点歌入口用；
     # 多选入口已在处理器里单选单曲、放不了如实报告——坑113改版）
@@ -225,6 +229,19 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
             except Exception as e:
                 logger.warning(f"[发卡] 163官方卡失败: {type(e).__name__} {e}")
                 card_note = ""
+        # 坑118外篇（2026-11-17 用户拍板）：跨平台找补场景，原曲网易云
+        # 免费 → 优先发原曲的163官方卡（卡片只是链接，不需要音频；
+        # "文件过大"是我们给语音条设的下载上限，不挡官方卡），酷我
+        # 音频继续当语音条。官方卡失败才落 custom 卡兜底。
+        if not card_done and not card_note and orig \
+                and orig.get("src", "netease") == "netease" \
+                and orig.get("fee") != 1:
+            try:
+                await matcher.send(MessageSegment.music("163", str(orig["id"])))
+                card_done = True
+                logger.info(f"[发卡] 163官方卡(找补原曲) OK id={orig['id']}")
+            except Exception as e:
+                logger.warning(f"[发卡] 163官方卡(找补原曲)失败: {type(e).__name__} {e}")
         if not card_done and src == "netease":
             # 网易云 VIP/官方卡发不出去 → QQ 音乐找补（坑80续：哪边免费用哪边）
             mid, vip = await qq_card_mid(kw)
@@ -361,7 +378,7 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
                 f"您选的这首在{_why_no_audio(s, err)}——"
                 f"同一首歌我从{'酷我' if alt['src'] == 'kuwo' else 'QQ 音乐'}的柜子里"
                 f"找到了，给您递过来：")
-            await deliver(pick_cmd, bot, event, kw, [alt], force_file, audio=a2, sec=s2)
+            await deliver(pick_cmd, bot, event, kw, [alt], force_file, audio=a2, sec=s2, orig=s)
             return
         # ② QQ 音乐卡片找补（跳转听；条目本身就是 QQ 的就不用再找）
         if s.get("src", "netease") != "qq" and (s.get("fee") == 1 or err == "不是音频"):

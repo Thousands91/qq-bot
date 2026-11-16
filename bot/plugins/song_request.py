@@ -336,6 +336,17 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
         # ① 同曲跨平台音频找补（能直接听的优先——不用跳别的平台）
         alt, a2, s2 = await same_song_elsewhere(s)
         if alt and a2:
+            # 坑118续（2026-11-17 用户实测"列表选歌无卡片"）：酷我条目天生
+            # 不带封面字段，custom 卡无图会被 NapCat 拒 → 每次都落文字卡。
+            # 把原曲封面带过去：搜索条目自带的 pic 优先，网易云条目再退
+            # meting 的 song 接口（稳定带 pic）。QQ 找补分支自带封面兜底。
+            if not alt.get("pic"):
+                alt["pic"] = s.get("pic") or ""
+                if s.get("src", "netease") == "netease" and not alt["pic"]:
+                    try:
+                        alt["pic"] = await _song_pic(s["id"]) or ""
+                    except Exception:
+                        pass
             await pick_cmd.send(
                 f"您选的这首在{_why_no_audio(s, err)}——"
                 f"同一首歌我从{'酷我' if alt['src'] == 'kuwo' else 'QQ 音乐'}的柜子里"

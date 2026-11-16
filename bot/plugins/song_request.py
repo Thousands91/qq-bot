@@ -411,10 +411,26 @@ def probe(sec: int, size: int, result: str, err: str) -> None:
 
 
 async def _song_pic(song_id: int) -> str:
-    """搜索接口的封面字段（album.picUrl）经常是空的，meting 的 song
-    接口稳定带 pic。NapCat 自定义卡片 image 是必填，缺了整卡被拒
-    （实测报"自定义音乐卡片缺少必需参数: image"）。
+    """封面链路（坑118终版）：网易云官方 song/detail 接口的专辑 picUrl
+    是**直链**（实测 HTTP 200，一步到位）；meting 的 pic 是 302 跳转链
+    且带 param=90y90 缩略参数——QQ 卡片抓二次跳转很容易失败，抓到也是
+    缩略小图（用户实测 04:20/04:22 两张 custom 卡均无封面）。
+    官方直链优先，meting 跳转链降为兜底。
     """
+    try:
+        async with aiohttp.ClientSession(headers={"User-Agent": UA}) as sess:
+            async with sess.get(
+                f"https://music.163.com/api/song/detail?id={song_id}&ids=%5B{song_id}%5D",
+                headers={"Referer": "https://music.163.com/"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                d = await r.json(content_type=None)
+        s = (d.get("songs") or [{}])[0]
+        pic = (s.get("album") or {}).get("picUrl") or ""
+        if pic:
+            return f"{pic}?param=300y300"
+    except Exception:
+        pass
     return await _meting_pic("netease", song_id)
 
 

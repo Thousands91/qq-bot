@@ -212,14 +212,18 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
             try:
                 await matcher.send(MessageSegment.music("qq", s["id"]))
                 card_done = True
+                logger.info(f"[发卡] qq官方卡 OK id={s['id']}")
                 card_note = ("点这张卡片去 QQ 音乐听——切界面、锁屏都不会停。")
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[发卡] qq官方卡失败: {type(e).__name__} {e}")
                 card_note = ""
         elif src == "netease" and s.get("fee") != 1:
             try:
                 await matcher.send(MessageSegment.music("163", str(s["id"])))
                 card_done = True
-            except Exception:
+                logger.info(f"[发卡] 163官方卡 OK id={s['id']}")
+            except Exception as e:
+                logger.warning(f"[发卡] 163官方卡失败: {type(e).__name__} {e}")
                 card_note = ""
         if not card_done and src == "netease":
             # 网易云 VIP/官方卡发不出去 → QQ 音乐找补（坑80续：哪边免费用哪边）
@@ -228,6 +232,7 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
                 try:
                     await matcher.send(MessageSegment.music("qq", mid))
                     card_done = True
+                    logger.info(f"[发卡] qq找补官方卡 OK mid={mid}")
                     if vip:
                         card_note = ("上面这张卡片是 QQ 音乐的同一首歌，点它也能后台听；"
                                      "不过这首在 QQ 音乐要 VIP，点进去可能只能试听几十秒，"
@@ -243,8 +248,13 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
         # 坑107终局：官方模板卡要过外部签名服务，公益签名服务全灭时
         # 发卡失败——这里接 custom 卡兜底，再不行文字卡，点歌体验不断；
         # 上游复活时真卡自动回来，无需人工干预
+        # 坑118仪表化：每个分支发没发出去都落日志，实测无卡时日志必给实锤
         if not card_done and not card_note:
-            if not await send_custom_card(s):
+            _ok = await send_custom_card(s)
+            if _ok:
+                logger.info(f"[发卡] custom卡 OK src={s.get('src','netease')} id={s['id']}")
+            else:
+                logger.warning(f"[发卡] custom卡失败(封面缺或发送异常) src={s.get('src','netease')} id={s['id']} → 落文字卡")
                 await matcher.send(Message(build_card(s)))
 
         try:
@@ -449,6 +459,7 @@ async def send_custom_card(s: dict) -> bool:
         if not pic:
             pic = await _song_pic(s["id"])
     if not pic:
+        logger.warning(f"[发卡] custom卡放弃: 无封面 src={src} id={s['id']}")
         return False  # NapCat 硬性要求 image，拿不到封面就别硬发
     try:
         await song_cmd.send(MessageSegment.music_custom(
@@ -458,8 +469,10 @@ async def send_custom_card(s: dict) -> bool:
             content=s.get("album") or None,
             img_url=pic,
         ))
+        logger.info(f"[发卡] custom卡发送成功 src={src} id={s['id']}")
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[发卡] custom卡发送异常: {type(e).__name__} {e}")
         return False
 
 

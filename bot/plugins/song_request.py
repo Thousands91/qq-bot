@@ -106,52 +106,13 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
     songs = await search(kw) if src == "netease" else (
         await search_kuwo(kw) if src == "kuwo" else await search_qq(kw))
 
-    # 原曲是 VIP 发不出声时，宁可说实话也不拿翻唱充数。
-    # 判定：关键词里带了歌手名，搜到了该歌手的同名原曲，但它只有 VIP 版。
-    # （仅网易云入口；qq/酷我入口选歌后走各自平台的找补链）
-    kws = re.split(r"[\s,，、/]+", kw.strip())
-    title = _norm(kws[0]) if kws else ""
-    artist_words = [_norm(x) for x in kws[1:]]
-    if title and artist_words and src == "netease":
-        vip_original = None
-        free_original = False
-        for s in songs:
-            if title in _norm(s["name"]) and any(a in _norm(s["artists"]) for a in artist_words):
-                if s.get("fee") == 1:
-                    vip_original = s
-                else:
-                    free_original = True
-        if vip_original and not free_original:
-            s = vip_original
-            # 网易云拿不来，先问 QQ 音乐有没有免费的（坑80续：哪边免费用哪边）
-            mid, vip = await qq_card_mid(kw)
-            if mid and not vip:
-                try:
-                    await song_cmd.send(MessageSegment.music("qq", mid))
-                    await song_cmd.finish(
-                        Message(f"{build_card(s)}\n\n这首在网易云要 VIP，但 QQ 音乐有免费的"
-                                f"——点上面这张卡片去 QQ 音乐听完整版，切界面、锁屏都不会停。")
-                    )
-                except FinishedException:
-                    raise
-                except Exception:
-                    pass  # 卡片没发出去就走下面的诚实告知
-            # 坑118外篇四：官方卡只是跳转链接，不需要音频——VIP 歌照样发得出去。
-            # 以前这里直接落纯文字链接卡，用户误以为"新版收不到卡片"。现改成
-            # 官方163卡 → custom卡 → 文字卡 三级兜底，VIP 也先给真卡片。
-            if await try_official_card(song_cmd, s):
-                await song_cmd.finish(
-                    f"这首是「{s['artists']}」的原曲，两边平台都要 VIP，柜上拿不来整首的音频"
-                    f"——点上面这张卡片去网易云听（有会员就能听整首）。"
-                )
-            if await send_custom_card(s):
-                await song_cmd.finish(
-                    f"这首是「{s['artists']}」的原曲，两边平台都要 VIP——点上面这张卡片听吧。"
-                )
-            await song_cmd.finish(
-                Message(f"{build_card(s)}\n\n这首是「{s['artists']}」的原曲，两边平台都要 VIP，"
-                        f"柜上拿不来整首的音频，翻唱的又不肯糊弄您——点上面的链接去听吧。")
-            )
+    # 坑118外篇五（2026-11-18 用户拍板）：取消"VIP 原曲直接发卡跳过列表"特判。
+    # 用户明确"都要先回复列表，再由用户从列表里选歌"——不管是不是 VIP、
+    # 有没有带歌手名，一律先出候选列表。VIP 歌放行到列表里（下面 keep_all），
+    # 用户选中后由 pick_cmd 按"网易云官方卡优先"发卡；官方卡只是跳转链接，
+    # 不需要音频，VIP 歌照样能拿到带"网易云音乐"标的真卡片。
+    # 旧特判（4a071bf 及之前）在这里提前 finish，导致带歌手名的 VIP 歌
+    # 永远看不到列表——已删除，相关 QQ 找补逻辑仍在 pick_cmd 里兜底。
 
     # 坑113续（2026-11-15 用户拍板）：候选**不过滤** VIP/现场/伴奏版——
     # 已经是人选歌了，该让人看到全部真实结果；选中放不了会如实相告。
@@ -420,6 +381,15 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
                 f"找到了，给您递过来：")
             await deliver(pick_cmd, bot, event, kw, [alt], force_file, audio=a2, sec=s2, orig=s)
             return
+        # 坑118外篇五（2026-11-18 用户拍板）：网易云 VIP 歌优先发"网易云官方卡"——
+        # 官方卡天然带"网易云音乐"标，卡片只是跳转链接不需要音频。用户截图实测
+        # 已能收到该标（02:19:40 [发卡]163官方卡OK id=284799），之前"做不了"是
+        # 把官方卡和 custom 卡搞混的误判。QQ 找补卡显示"QQ音乐"标，降为兜底。
+        if s.get("src", "netease") == "netease" and s.get("fee") == 1:
+            if await try_official_card(pick_cmd, s):
+                await pick_cmd.finish(
+                    f"这首是「{s['artists']}」的原曲，两边平台都要 VIP，柜上拿不来整首的音频"
+                    f"——点上面这张卡片去网易云听（有会员就能听整首）。")
         # ② QQ 音乐卡片找补（跳转听；条目本身就是 QQ 的就不用再找）
         if s.get("src", "netease") != "qq" and (s.get("fee") == 1 or err == "不是音频"):
             mid, qvip = await qq_card_mid(s["name"])
@@ -438,11 +408,6 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
                 except Exception:
                     pass  # 卡片没递出去就走下面的诚实告知
             if s.get("fee") == 1:
-                # 坑118外篇四：VIP 歌也先给真卡片（官方卡只是链接，不需要音频）
-                if await try_official_card(pick_cmd, s):
-                    await pick_cmd.finish(
-                        f"这首是「{s['artists']}」的原曲，两边平台都要 VIP，柜上拿不来整首的音频"
-                        f"——点上面这张卡片去网易云听（有会员就能听整首）。")
                 if await send_custom_card(s):
                     await pick_cmd.finish(
                         f"这首是「{s['artists']}」的原曲，两边平台都要 VIP——点上面这张卡片听吧。")

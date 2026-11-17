@@ -144,11 +144,13 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
 
 
 async def try_official_card(matcher, s: dict) -> bool:
-    """发官方模板卡（163/qq）。卡片只是一张跳转链接，**不需要本地音频**
-    ——VIP 歌、文件过大、取不到音频的歌照样能发（坑118外篇二用户拍板：
-    "能走官方卡就直接走"；04:49 大悲咒=网易云VIP+文件过大，163官方卡实测成功）。
-    NapCat 侧要过签名服务，上游波动时抛异常→返回 False 交兜底。
-    酷我没有官方模板卡，直接返回 False。
+    """发官方模板卡（163/qq/kuwo/kugou/migu）。卡片只是一张跳转链接，
+    **不需要本地音频**——VIP 歌、文件过大、取不到音频的歌照样能发（坑118外篇二
+    用户拍板："能走官方卡就直接走"）。NapCat 侧要过签名服务，上游波动抛异常
+    →返回 False 交兜底。
+    坑123翻案（11-18）：旧代理4上游不支持kuwo官方卡契约故长期return False；
+    接入OIAPI全平台签名源后，酷我官方卡实测能出真·"酷我音乐"标卡（appid
+    100243533）——kuwo 分支不再放弃，改发 music("kuwo", id)。
     """
     src = s.get("src", "netease")
     try:
@@ -156,7 +158,8 @@ async def try_official_card(matcher, s: dict) -> bool:
             await matcher.send(MessageSegment.music("qq", s["id"]))
             logger.info(f"[发卡] qq官方卡 OK id={s['id']}")
         elif src == "kuwo":
-            return False
+            await matcher.send(MessageSegment.music("kuwo", str(s["id"])))
+            logger.info(f"[发卡] kuwo官方卡 OK id={s['id']} (坑123 OIAPI酷我标)")
         else:
             await matcher.send(MessageSegment.music("163", str(s["id"])))
             logger.info(f"[发卡] 163官方卡 OK id={s['id']}")
@@ -227,6 +230,18 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
                 logger.info(f"[发卡] 163官方卡 OK id={s['id']}")
             except Exception as e:
                 logger.warning(f"[发卡] 163官方卡失败: {type(e).__name__} {e}")
+                card_note = ""
+        elif src == "kuwo":
+            # 坑123翻案（11-18）：接入OIAPI全平台签名源后，酷我官方卡能出真
+            # "酷我音乐"标卡（实测 appid=100243533）——不再只靠无封面的custom
+            # 卡（QQ音乐标）。先发官方酷我卡，失败再落下面的custom/文字卡兜底。
+            try:
+                await matcher.send(MessageSegment.music("kuwo", str(s["id"])))
+                card_done = True
+                logger.info(f"[发卡] kuwo官方卡 OK id={s['id']} (坑123 OIAPI酷我标)")
+                card_note = "点这张卡片去酷我音乐听——切界面、锁屏都不会停。"
+            except Exception as e:
+                logger.warning(f"[发卡] kuwo官方卡失败: {type(e).__name__} {e}")
                 card_note = ""
         # 坑118外篇（2026-11-17 用户拍板）：跨平台找补场景，原曲网易云
         # 免费 → 优先发原曲的163官方卡（卡片只是链接，不需要音频；

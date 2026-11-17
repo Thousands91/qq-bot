@@ -136,6 +136,18 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
                     raise
                 except Exception:
                     pass  # 卡片没发出去就走下面的诚实告知
+            # 坑118外篇四：官方卡只是跳转链接，不需要音频——VIP 歌照样发得出去。
+            # 以前这里直接落纯文字链接卡，用户误以为"新版收不到卡片"。现改成
+            # 官方163卡 → custom卡 → 文字卡 三级兜底，VIP 也先给真卡片。
+            if await try_official_card(song_cmd, s):
+                await song_cmd.finish(
+                    f"这首是「{s['artists']}」的原曲，两边平台都要 VIP，柜上拿不来整首的音频"
+                    f"——点上面这张卡片去网易云听（有会员就能听整首）。"
+                )
+            if await send_custom_card(s):
+                await song_cmd.finish(
+                    f"这首是「{s['artists']}」的原曲，两边平台都要 VIP——点上面这张卡片听吧。"
+                )
             await song_cmd.finish(
                 Message(f"{build_card(s)}\n\n这首是「{s['artists']}」的原曲，两边平台都要 VIP，"
                         f"柜上拿不来整首的音频，翻唱的又不肯糊弄您——点上面的链接去听吧。")
@@ -168,6 +180,29 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
         + "\n".join(lines)
         + "\n直接发序号就行；发「取消」或超时作废。"
     )
+
+
+async def try_official_card(matcher, s: dict) -> bool:
+    """发官方模板卡（163/qq）。卡片只是一张跳转链接，**不需要本地音频**
+    ——VIP 歌、文件过大、取不到音频的歌照样能发（坑118外篇二用户拍板：
+    "能走官方卡就直接走"；04:49 大悲咒=网易云VIP+文件过大，163官方卡实测成功）。
+    NapCat 侧要过签名服务，上游波动时抛异常→返回 False 交兜底。
+    酷我没有官方模板卡，直接返回 False。
+    """
+    src = s.get("src", "netease")
+    try:
+        if src == "qq":
+            await matcher.send(MessageSegment.music("qq", s["id"]))
+            logger.info(f"[发卡] qq官方卡 OK id={s['id']}")
+        elif src == "kuwo":
+            return False
+        else:
+            await matcher.send(MessageSegment.music("163", str(s["id"])))
+            logger.info(f"[发卡] 163官方卡 OK id={s['id']}")
+        return True
+    except Exception as e:
+        logger.warning(f"[发卡] 官方卡失败 src={src} id={s['id']}: {type(e).__name__} {e}")
+        return False
 
 
 async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEvent,
@@ -221,7 +256,10 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
             except Exception as e:
                 logger.warning(f"[发卡] qq官方卡失败: {type(e).__name__} {e}")
                 card_note = ""
-        elif src == "netease" and s.get("fee") != 1:
+        elif src == "netease":
+            # 坑118外篇四：去掉 fee!=1 限制——VIP 歌也先试官方163卡（卡片只是
+            # 跳转链接不需要音频；用户拍板"能走官方卡就直接走"）。发不出去再
+            # 由下面的 QQ找补/custom卡/文字卡兜底，不会漏卡。
             try:
                 await matcher.send(MessageSegment.music("163", str(s["id"])))
                 card_done = True
@@ -300,7 +338,9 @@ async def deliver(matcher, bot: Bot, event: GroupMessageEvent | PrivateMessageEv
                 Message(f"{build_card(s)}\n\n{note}，文件也没传上去。点上面的链接听吧。")
             )
 
-    # 全都拿不到音频，退回卡片
+    # 全都拿不到音频，仍先递官方卡（卡片只是链接不需要音频），再退回文字卡
+    if await try_official_card(matcher, card):
+        await matcher.finish("这首柜上翻不出音频，点上面这张卡片去平台听吧。")
     await matcher.finish(
         Message(f"{build_card(card)}\n\n曲子我调不出来，只能给您递个名目。")
     )
@@ -398,6 +438,14 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
                 except Exception:
                     pass  # 卡片没递出去就走下面的诚实告知
             if s.get("fee") == 1:
+                # 坑118外篇四：VIP 歌也先给真卡片（官方卡只是链接，不需要音频）
+                if await try_official_card(pick_cmd, s):
+                    await pick_cmd.finish(
+                        f"这首是「{s['artists']}」的原曲，两边平台都要 VIP，柜上拿不来整首的音频"
+                        f"——点上面这张卡片去网易云听（有会员就能听整首）。")
+                if await send_custom_card(s):
+                    await pick_cmd.finish(
+                        f"这首是「{s['artists']}」的原曲，两边平台都要 VIP——点上面这张卡片听吧。")
                 await pick_cmd.finish(
                     Message(f"{build_card(s)}\n\n这首是「{s['artists']}」的原曲，"
                             f"两边平台都要 VIP，柜上拿不来整首的音频"

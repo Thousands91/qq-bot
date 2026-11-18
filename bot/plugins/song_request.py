@@ -78,9 +78,11 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
     force_file = bool(re.search(r"\s*(文件|file)$", kw, re.I))
     kw = re.sub(r"\s*(文件|file)$", "", kw, flags=re.I).strip()
 
-    # 坑114：平台后缀——"点歌 X 酷我/kuwo"、"点歌 X qq/QQ音乐" 直接去
-    # 那个平台搜。酷狗/咪咕用户点了要如实告知接不了（酷狗音频全要签名、
-    # 咪咕老接口已死，搜了放不出来=答非所问，宁可不接）。
+    # 坑114：平台后缀——"点歌 X 酷我/kuwo"、"点歌 X 酷狗"、"点歌 X 咪咕" 去对应平台。
+    # 坑124方案（11-18）：酷狗/咪咕从"拒绝"改为"接入"——关键点：官方卡只是跳转链接
+    # 不需要本地音频，所以酷狗"音频要签名"、咪咕"搜索接口死"都不再是阻碍。做法：
+    # 复用网易云搜索拿歌名歌手（这两家没可用搜索接口），把歌名塞进条目 id，
+    # 签名代理 v4 收到 music("kugou"/"migu", 歌名) 后用 OIAPI 出对应标真卡。
     src = "netease"
     m = re.search(r"\s+(酷我|kuwo|qq|qq音乐|QQ音乐|酷狗|kugou|咪咕|migu)$", kw, re.I)
     if m:
@@ -90,21 +92,27 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
             src = "kuwo"
         elif tag.startswith("qq"):
             src = "qq"
+        elif "酷狗" in tag or tag == "kugou":
+            src = "kugou"
         else:
-            why = ("酷狗的音频接口全要加密签名" if "酷狗" in tag or tag == "kugou"
-                   else "咪咕的搜索接口已经死了")
-            await song_cmd.finish(
-                f"「{kw}」的{tag}柜子暂时翻不动——{why}，接进来也只能给您看歌名放不出声。"
-                f"先用酷我或 QQ 音乐吧，这两家是全的。")
+            src = "migu"
 
     if not kw:
         await song_cmd.finish("想听什么？说个歌名、歌手名都行；后面加个'文件'就发文件版（能后台听）。")
 
     await song_cmd.send(f"翻柜子找「{kw}」，稍等一下……")
 
-    # 坑114：按平台后缀分发搜索；song 条目统一带 src 字段（netease/qq/kuwo）
+    # 坑114：按平台后缀分发搜索；song 条目统一带 src 字段（netease/qq/kuwo/kugou/migu）
     songs = await search(kw) if src == "netease" else (
         await search_kuwo(kw) if src == "kuwo" else await search_qq(kw))
+    # 坑124方案：酷狗/咪咕没有可用搜索接口，复用网易云搜索结果拿"歌名-歌手"，
+    # 再把歌名塞进 id（签名代理拿它当 song 喂 OIAPI 出对应平台标），打上 src 标记。
+    # 官方卡是纯跳转链接，歌名对了卡就对了，不需要该平台的真实 id/音频。
+    if src in ("kugou", "migu"):
+        songs = [{
+            "id": s["name"], "name": s["name"], "artists": s.get("artists", ""),
+            "album": s.get("album", ""), "fee": 0, "src": src,
+        } for s in songs if s.get("name")]
 
     # 坑118外篇五（2026-11-18 用户拍板）：取消"VIP 原曲直接发卡跳过列表"特判。
     # 用户明确"都要先回复列表，再由用户从列表里选歌"——不管是不是 VIP、
@@ -132,7 +140,9 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent, arg: Messa
         + ("（VIP）" if s.get("fee") == 1 else "")
         + (f" 《{s['album']}》" if s.get("album") else "")
         + ("" if s.get("src", "netease") == "netease"
-           else "〔酷我〕" if s["src"] == "kuwo" else "〔QQ〕")
+           else "〔酷我〕" if s["src"] == "kuwo"
+           else "〔酷狗〕" if s["src"] == "kugou"
+           else "〔咪咕〕" if s["src"] == "migu" else "〔QQ〕")
         for i, s in enumerate(picks)
     ]
     _PENDING[event.get_session_id()] = (time.time() + PICK_TIMEOUT, picks, force_file, kw)
@@ -160,6 +170,10 @@ async def try_official_card(matcher, s: dict) -> bool:
         elif src == "kuwo":
             await matcher.send(MessageSegment.music("kuwo", str(s["id"])))
             logger.info(f"[发卡] kuwo官方卡 OK id={s['id']} (坑123 OIAPI酷我标)")
+        elif src in ("kugou", "migu"):
+            # 坑124方案：歌名存在 id 里，代理 v4 拿它当 song 喂 OIAPI 出对应标真卡
+            await matcher.send(MessageSegment.music(src, str(s["id"])))
+            logger.info(f"[发卡] {src}官方卡 OK 歌名={s['id']} (坑124 OIAPI全平台标)")
         else:
             await matcher.send(MessageSegment.music("163", str(s["id"])))
             logger.info(f"[发卡] 163官方卡 OK id={s['id']}")
@@ -371,6 +385,15 @@ async def _(bot: Bot, event: GroupMessageEvent | PrivateMessageEvent):
     if not audio:
         if expiry >= time.time():
             _PENDING[sid] = (expiry, picks, force_file, kw)
+        # 坑124方案：酷狗/咪咕本来就不取音频（官方卡=纯跳转链接，签名代理出
+        # 对应标真卡），fetch_audio_any 对它们必然返回 None 是预期内，不算故障。
+        # 直接在这里发官方卡收尾，别掉进下面的"网络错误/跨平台找补/如实告知"。
+        if s.get("src") in ("kugou", "migu"):
+            if await try_official_card(pick_cmd, s):
+                label = "酷狗音乐" if s["src"] == "kugou" else "咪咕音乐"
+                await pick_cmd.finish(
+                    f"点上面这张「{label}」卡片，去{label}听「{s['name']}」——"
+                    f"卡片是跳转链接，用对应 App 打开就能放。")
         # 网络类错误先如实说：不是歌的问题，重试可能就好，不浪费找补
         if "HTTP" in err or "Error" in err or "Timeout" in err:
             await pick_cmd.finish(
@@ -688,8 +711,10 @@ async def fetch_audio(song_id: int):
 #   网易云 搜索✅ 音频✅（部分VIP/版权拿不到）——主平台
 #   QQ音乐 搜索✅（自家接口） 音频✅（meting代理直链）——全链路
 #   酷我   搜索✅（r.s老接口） 音频✅（antiserver直链）——全链路
-#   酷狗   搜索✅ 音频❌（全要加密签名）——不接，搜了放不出=答非所问
-#   咪咕   搜索❌（老接口已死）——不接
+#   酷狗/咪咕 原判定"音频要签名/搜索死"→不接（那是为语音条写的，已过时）
+#   坑124方案（11-18）：官方卡=纯跳转链接不需要本地音频，复用网易云搜索拿
+#   歌名歌手 → 塞进 id → 代理v4 用 OIAPI 出对应标真卡（酷狗音乐/咪咕音乐）。
+#   搜索用网易云的（这两家自身搜索接口死的死、要签名的要签名），只发卡不取音频。
 
 
 async def search_qq(keyword: str) -> list:
@@ -806,6 +831,9 @@ async def fetch_audio_any(s: dict):
         return await fetch_audio_kuwo(s["id"])
     if src == "qq":
         return await fetch_audio_qq(s["id"])
+    if src in ("kugou", "migu"):
+        # 坑124：这两家只发官方卡（跳转链接），不取音频；id 里存的是歌名
+        return None, 0, "官方卡平台"
     return await fetch_audio(s["id"])
 
 
